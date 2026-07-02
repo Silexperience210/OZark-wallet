@@ -109,7 +109,9 @@ jobs:
           export AR_x86_64_linux_android="$NDK_BIN/llvm-ar"
           export RANLIB_x86_64_linux_android="$NDK_BIN/llvm-ranlib"
 
-          npm run tauri android build -- --apk
+          # arm64-only keeps the APK small (~55 MB vs ~209 MB universal); covers
+          # essentially all modern phones. Same command android.yml already proves.
+          npm run tauri android build -- --apk --target aarch64
 
       - name: Sign APK
         if: ${{ env.ANDROID_KEYSTORE_BASE64 != '' }}
@@ -118,22 +120,28 @@ jobs:
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
-          APK_DIR="src-tauri/gen/android/app/build/outputs/apk/universal/release"
-          UNSIGNED_APK="$APK_DIR/app-universal-release-unsigned.apk"
-          SIGNED_APK="$APK_DIR/app-universal-release.apk"
-
-          if [ -f "$UNSIGNED_APK" ]; then
-            echo "$ANDROID_KEYSTORE_BASE64" | base64 -d > /tmp/ozark-wallet.keystore
-            # Pick the latest installed apksigner (avoid wildcard expansion issues).
-            APKSIGNER="$(find "$ANDROID_HOME/build-tools" -name apksigner -type f | sort -V | tail -n 1)"
+          echo "$ANDROID_KEYSTORE_BASE64" | base64 -d > /tmp/ozark-wallet.keystore
+          # Pick the latest installed apksigner (avoid wildcard expansion issues).
+          APKSIGNER="$(find "$ANDROID_HOME/build-tools" -name apksigner -type f | sort -V | tail -n 1)"
+          BASE="src-tauri/gen/android/app/build/outputs/apk"
+          signed=0
+          # Sign every unsigned release APK — robust to the exact name/dir Tauri
+          # emits (universal, arm64-only, or per-ABI splits).
+          for UNSIGNED in $(find "$BASE" -name "*-release-unsigned.apk"); do
+            SIGNED="${UNSIGNED%-unsigned.apk}.apk"
             "$APKSIGNER" sign \
               --ks /tmp/ozark-wallet.keystore \
               --ks-pass env:ANDROID_KEYSTORE_PASSWORD \
               --key-pass env:ANDROID_KEY_PASSWORD \
               --ks-key-alias "$ANDROID_KEY_ALIAS" \
-              --out "$SIGNED_APK" \
-              "$UNSIGNED_APK"
-            rm -f /tmp/ozark-wallet.keystore
+              --out "$SIGNED" \
+              "$UNSIGNED"
+            echo "signed -> $SIGNED"
+            signed=1
+          done
+          rm -f /tmp/ozark-wallet.keystore
+          if [ "$signed" != 1 ]; then
+            echo "ERROR: no unsigned release APK found under $BASE"; exit 1
           fi
 
       - name: Upload APK artifact
@@ -146,7 +154,7 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
-          files: src-tauri/gen/android/app/build/outputs/apk/universal/release/*.apk
+          files: src-tauri/gen/android/app/build/outputs/apk/**/*-release.apk
           name: OZark Wallet ${{ github.ref_name }}
           draft: false
           prerelease: false

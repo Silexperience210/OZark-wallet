@@ -44,9 +44,15 @@ export function UpdateBanner() {
         if (!res.ok) return;
         const data = await res.json();
         const tag: string = data?.tag_name ?? "";
-        const asset = (data?.assets ?? []).find(
-          (a: { name?: string; browser_download_url?: string }) => a.name === APK_ASSET,
-        );
+        // Pick the APK robustly: prefer the universal name, else an arm64/aarch64
+        // split, else any .apk — so this keeps working whether the release ships a
+        // universal APK or per-ABI splits.
+        const assets: { name?: string; browser_download_url?: string }[] = data?.assets ?? [];
+        const isApk = (n?: string) => !!n && /\.apk$/i.test(n);
+        const asset =
+          assets.find((a) => a.name === APK_ASSET) ||
+          assets.find((a) => isApk(a.name) && /arm64|aarch64/i.test(a.name || "")) ||
+          assets.find((a) => isApk(a.name));
         if (!tag || !asset?.browser_download_url) return;
         if (!isNewer(tag, current)) return;
         if (localStorage.getItem(DISMISS_KEY) === tag) return;
