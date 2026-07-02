@@ -85,8 +85,6 @@ OZark can connect to a remote `tapd` instance over a Tor hidden service. The def
 - TLS certificate
 - tapd macaroon
 
-> ⚠️ The release APK includes these defaults. If you publish the APK publicly, the macaroon is part of the binary.
-
 To use your own node, replace the values in `src-tauri/src/tapd_defaults.rs` or build locally with a custom `tapd-defaults.json`.
 
 ## Security
