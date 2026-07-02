@@ -268,6 +268,10 @@ export const translations = {
       message: "Supprimer ce wallet de cet appareil ? Assurez-vous d'avoir sauvegardé votre seed.",
       confirm: "Supprimer",
     },
+    update: {
+      available: "Mise à jour disponible :",
+      download: "Télécharger",
+    },
     passwordPrompt: {
       title: "Mot de passe requis",
       placeholder: "Entrez votre mot de passe",
@@ -557,6 +561,10 @@ export const translations = {
       title: "Reset wallet",
       message: "Delete this wallet from this device? Make sure you have backed up your seed.",
       confirm: "Delete",
+    },
+    update: {
+      available: "Update available:",
+      download: "Download",
     },
     passwordPrompt: {
       title: "Password required",

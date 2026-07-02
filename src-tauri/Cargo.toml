@@ -1,6 +1,6 @@
 [package]
 name = "ozark-wallet"
-version = "0.3.5"
+version = "0.3.6"
 description = "OZark Wallet - Bitcoin ARK Layer 2"
 authors = ["OZark"]
 edition = "2021"
@@ -55,6 +55,7 @@ tower-service = "0.3"
 # cert with a custom verifier instead. ring provider to match arti (no aws-lc-rs).
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
 tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12", "logging"] }
+tauri-plugin-opener = "2"
 
 [target.'cfg(target_os = "android")'.dependencies]
 # native-tls falls back to OpenSSL on Android; vendored avoids needing system libs.

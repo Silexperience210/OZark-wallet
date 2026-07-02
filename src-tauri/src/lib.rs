@@ -80,6 +80,7 @@ pub fn run() {
     #[allow(unused_mut)]
     let mut builder = tauri::Builder::default()
         .plugin(tauri_plugin_deep_link::init())
+        .plugin(tauri_plugin_opener::init())
         .setup(|app| {
             let data_dir = WalletState::data_dir(app.handle())?;
             app.manage(WalletState::new(data_dir));

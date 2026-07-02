@@ -9,6 +9,7 @@
     "barcode-scanner:allow-cancel",
     "deep-link:default",
     "nfc:default",
-    "nfc:allow-write"
+    "nfc:allow-write",
+    "opener:allow-open-url"
   ]
 }

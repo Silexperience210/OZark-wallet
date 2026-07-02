@@ -5,6 +5,7 @@ import { getCurrent, onOpenUrl } from "@tauri-apps/plugin-deep-link";
 import { I18nProvider, useI18n } from "./i18n/I18nContext";
 import { NotificationProvider, useNotification } from "./contexts/NotificationContext";
 import { NotificationContainer } from "./components/Notification";
+import { UpdateBanner } from "./components/UpdateBanner";
 import { ConfirmModal } from "./components/ConfirmModal";
 import { Welcome } from "./screens/Welcome";
 import { CreateWallet } from "./screens/CreateWallet";
@@ -139,6 +140,7 @@ function AppContent() {
     <div className="app-container">
       <div className="scanline" />
       <NotificationContainer />
+      <UpdateBanner />
       <ConfirmModal
         open={resetModalOpen}
         title={t("reset.title")}
