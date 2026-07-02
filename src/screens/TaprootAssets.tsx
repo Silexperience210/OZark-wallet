@@ -770,11 +770,11 @@ export function TaprootAssets({ onBack }: TaprootAssetsProps) {
   const assetBadge = (name: string) => (name || "?").trim().charAt(0).toUpperCase();
 
   const TABS: { id: Tab; label: string; Icon: typeof Wallet }[] = [
-    { id: "portfolio", label: "Actifs", Icon: Wallet },
-    { id: "receive", label: "Recevoir", Icon: ArrowDownLeft },
-    { id: "send", label: "Envoyer", Icon: ArrowUpRight },
-    { id: "ln", label: "Lightning", Icon: Zap },
-    { id: "activity", label: "Activité", Icon: Activity },
+    { id: "portfolio", label: t("taproot.tabPortfolio"), Icon: Wallet },
+    { id: "receive", label: t("taproot.tabReceive"), Icon: ArrowDownLeft },
+    { id: "send", label: t("taproot.tabSend"), Icon: ArrowUpRight },
+    { id: "ln", label: t("taproot.tabLightning"), Icon: Zap },
+    { id: "activity", label: t("taproot.tabActivity"), Icon: Activity },
   ];
 
   const errorBox = error ? (
@@ -871,12 +871,12 @@ export function TaprootAssets({ onBack }: TaprootAssetsProps) {
           borderColor: "rgba(0,240,255,0.2)",
         }}
       >
-        <div className="text-muted" style={{ fontSize: 12 }}>Portefeuille Taproot</div>
+        <div className="text-muted" style={{ fontSize: 12 }}>{t("taproot.portfolioTitle")}</div>
         <div className="title-lg" style={{ marginTop: 4 }}>
           {assets.length} <span className="text-muted" style={{ fontSize: 15 }}>asset{assets.length > 1 ? "s" : ""}</span>
         </div>
         <div style={{ display: "flex", gap: 16, marginTop: 8, fontSize: 12 }} className="text-muted">
-          {nodeInfo && <span>Réseau : <b style={{ color: "var(--accent-cyan)" }}>{nodeInfo.network}</b></span>}
+          {nodeInfo && <span>{t("taproot.network")} : <b style={{ color: "var(--accent-cyan)" }}>{nodeInfo.network}</b></span>}
           {universeStats && <span>Universe : <b style={{ color: "var(--accent-cyan)" }}>{universeStats.num_assets}</b></span>}
         </div>
       </div>
@@ -899,7 +899,7 @@ export function TaprootAssets({ onBack }: TaprootAssetsProps) {
               <div style={{ display: "flex", alignItems: "center", gap: 11 }}>
                 <div style={{ width: 40, height: 40, borderRadius: 12, flex: "none", display: "grid", placeItems: "center", fontWeight: 800, color: "#000", background: "linear-gradient(135deg, var(--accent-cyan), var(--accent-purple))" }}>{assetBadge(a.name)}</div>
                 <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ fontWeight: 700 }}>{a.name || "(sans nom)"}</div>
+                  <div style={{ fontWeight: 700 }}>{a.name || t("taproot.noName")}</div>
                   <div className="text-muted" style={{ fontSize: 11 }}>{a.asset_type}{a.decimal_display ? ` · ${a.decimal_display} déc.` : ""}</div>
                 </div>
                 <div style={{ fontWeight: 700, fontVariantNumeric: "tabular-nums" }}>{fmtAmount(a.amount, a.decimal_display)}</div>
@@ -909,10 +909,10 @@ export function TaprootAssets({ onBack }: TaprootAssetsProps) {
                 <div className="text-muted" style={{ fontSize: 11, marginTop: 6, wordBreak: "break-all" }}>{metas[a.asset_id].meta_type}: {metas[a.asset_id].data || "(vide)"}</div>
               )}
               <div style={{ display: "flex", gap: 8, marginTop: 11 }}>
-                <button className="btn btn-secondary" style={{ flex: 1, padding: "8px" }} onClick={() => receiveAsset(a)}><ArrowDownLeft size={15} /> Recevoir</button>
-                <button className="btn btn-secondary" style={{ flex: 1, padding: "8px" }} onClick={() => setTab("send")}><ArrowUpRight size={15} /> Envoyer</button>
-                <button className="btn btn-ghost" style={{ padding: "8px 10px" }} onClick={() => showMeta(a.asset_id)} title="Métadonnées"><QrCode size={15} /></button>
-                <button className="btn btn-ghost" style={{ padding: "8px 10px", color: "var(--danger)" }} onClick={() => openBurn(a)} title="Détruire"><Flame size={15} /></button>
+                <button className="btn btn-secondary" style={{ flex: 1, padding: "8px" }} onClick={() => receiveAsset(a)}><ArrowDownLeft size={15} /> {t("taproot.tabReceive")}</button>
+                <button className="btn btn-secondary" style={{ flex: 1, padding: "8px" }} onClick={() => setTab("send")}><ArrowUpRight size={15} /> {t("taproot.tabSend")}</button>
+                <button className="btn btn-ghost" style={{ padding: "8px 10px" }} onClick={() => showMeta(a.asset_id)} title={t("taproot.meta")}><QrCode size={15} /></button>
+                <button className="btn btn-ghost" style={{ padding: "8px 10px", color: "var(--danger)" }} onClick={() => openBurn(a)} title={t("taproot.burn")}><Flame size={15} /></button>
               </div>
             </div>
           ))
@@ -923,7 +923,7 @@ export function TaprootAssets({ onBack }: TaprootAssetsProps) {
 
   const assetSelect = (value: string, onChange: (v: string) => void) => (
     <select className="input" value={value} onChange={(e) => onChange(e.target.value)} style={{ marginBottom: 11 }}>
-      <option value="">— choisir un asset —</option>
+      <option value="">{t("taproot.chooseAsset")}</option>
       {assets.map((a) => (
         <option key={a.asset_id} value={a.asset_id}>{a.name || a.asset_id.slice(0, 10)} — {fmtAmount(a.amount, a.decimal_display)}</option>
       ))}
@@ -933,14 +933,14 @@ export function TaprootAssets({ onBack }: TaprootAssetsProps) {
   function renderReceive() {
     return (
       <>
-        <div className="title-lg" style={{ margin: "6px 0 14px" }}>Recevoir</div>
+        <div className="title-lg" style={{ margin: "6px 0 14px" }}>{t("taproot.tabReceive")}</div>
         <div className="glass-card" style={{ padding: 20 }}>
-          <label className="text-muted" style={{ fontSize: 11, display: "block", marginBottom: 6 }}>Asset à recevoir</label>
+          <label className="text-muted" style={{ fontSize: 11, display: "block", marginBottom: 6 }}>{t("taproot.assetToReceive")}</label>
           {assetSelect(addrAssetId, (v) => { setAddrAssetId(v); setAddress(""); })}
           <label className="text-muted" style={{ fontSize: 11, display: "block", marginBottom: 6 }}>{t("taproot.amount")}</label>
           <input className="input" type="number" value={addrAmount} onChange={(e) => setAddrAmount(e.target.value)} style={{ marginBottom: 12 }} />
           <button className="btn btn-primary" onClick={newAddress} disabled={loading || !addrAssetId || !addrAmount} style={{ width: "100%" }}>
-            {loading ? <span className="spinner" /> : <QrCode size={16} />} Générer l'adresse
+            {loading ? <span className="spinner" /> : <QrCode size={16} />} {t("taproot.generateAddress")}
           </button>
           {address && (
             <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 12, marginTop: 16 }}>
@@ -949,7 +949,7 @@ export function TaprootAssets({ onBack }: TaprootAssetsProps) {
                 <span style={{ fontFamily: "var(--font-mono)", fontSize: 11, flex: 1, wordBreak: "break-all" }}>{address}</span>
                 <button className="btn btn-ghost" onClick={() => copyText(address)}>{copied ? <Check size={16} /> : <Copy size={16} />}</button>
               </div>
-              <div className="text-muted" style={{ fontSize: 11 }}>Adresse Taproot Asset · usage unique</div>
+              <div className="text-muted" style={{ fontSize: 11 }}>{t("taproot.addressOneTime")}</div>
             </div>
           )}
         </div>
@@ -960,9 +960,9 @@ export function TaprootAssets({ onBack }: TaprootAssetsProps) {
   function renderSend() {
     return (
       <>
-        <div className="title-lg" style={{ margin: "6px 0 14px" }}>Envoyer</div>
+        <div className="title-lg" style={{ margin: "6px 0 14px" }}>{t("taproot.tabSend")}</div>
         <div className="glass-card" style={{ padding: 20 }}>
-          <label className="text-muted" style={{ fontSize: 11, display: "block", marginBottom: 6 }}>Adresse Taproot Asset</label>
+          <label className="text-muted" style={{ fontSize: 11, display: "block", marginBottom: 6 }}>{t("taproot.taprootAddress")}</label>
           <div style={{ display: "flex", gap: 10, marginBottom: 12 }}>
             <input className="input" style={{ flex: 1 }} placeholder="taprt1…" value={sendAddress} onChange={(e) => { setSendAddress(e.target.value); setDecoded(null); }} />
             <button className="btn btn-secondary" style={{ flex: "none", padding: "0 14px" }} onClick={() => scanInto((v) => { setSendAddress(v); setDecoded(null); })}><ScanLine size={18} /></button>
@@ -973,10 +973,10 @@ export function TaprootAssets({ onBack }: TaprootAssetsProps) {
               <div className="text-muted" style={{ fontSize: 11, fontFamily: "var(--font-mono)", wordBreak: "break-all" }}>{decoded.asset_id}</div>
             </div>
           )}
-          <label className="text-muted" style={{ fontSize: 11, display: "block", marginBottom: 6 }}>Frais (sat/vB · 0 = auto)</label>
+          <label className="text-muted" style={{ fontSize: 11, display: "block", marginBottom: 6 }}>{t("taproot.feeRate")}</label>
           <input className="input" type="number" placeholder="0" value={sendFee} onChange={(e) => setSendFee(e.target.value)} style={{ marginBottom: 12 }} />
           <div style={{ display: "flex", gap: 10 }}>
-            <button className="btn btn-secondary" style={{ flex: 1 }} onClick={decodeAddrForSend} disabled={loading || !sendAddress}>Décoder</button>
+            <button className="btn btn-secondary" style={{ flex: 1 }} onClick={decodeAddrForSend} disabled={loading || !sendAddress}>{t("taproot.decode")}</button>
             <button className="btn btn-primary" style={{ flex: 1 }} onClick={send} disabled={loading || !sendAddress}>{loading ? <span className="spinner" /> : <Send size={16} />} {t("taproot.send")}</button>
           </div>
           {sendTxid && <div className="text-muted" style={{ marginTop: 12, fontSize: 12, wordBreak: "break-all" }}>TX: {sendTxid}</div>}
@@ -988,43 +988,43 @@ export function TaprootAssets({ onBack }: TaprootAssetsProps) {
   function renderLightning() {
     return (
       <>
-        <div className="title-lg" style={{ margin: "6px 0 6px" }}><Zap size={20} style={{ verticalAlign: "middle" }} /> Lightning</div>
+        <div className="title-lg" style={{ margin: "6px 0 6px" }}><Zap size={20} style={{ verticalAlign: "middle" }} /> {t("taproot.tabLightning")}</div>
         {assets.length > 1 && (
           <div className="glass-card" style={{ padding: 14, marginBottom: 14 }}>
-            <label className="text-muted" style={{ fontSize: 11, display: "block", marginBottom: 6 }}>Asset Lightning</label>
+            <label className="text-muted" style={{ fontSize: 11, display: "block", marginBottom: 6 }}>{t("taproot.lnAsset")}</label>
             {assetSelect(lnAssetId, setLnAssetId)}
           </div>
         )}
 
         {/* PAY (primary) */}
         <div className="glass-card" style={{ padding: 20, marginBottom: 14, borderColor: "rgba(0,240,255,0.22)" }}>
-          <div className="text-secondary" style={{ fontWeight: 600, marginBottom: 12 }}><ArrowUpRight size={16} style={{ verticalAlign: "middle" }} /> Payer une invoice</div>
-          <button className="btn btn-primary" style={{ width: "100%", marginBottom: 12 }} onClick={() => scanInto((v) => { setLnPayReq(v); setLnDecoded(null); })}><ScanLine size={18} /> Scanner un QR</button>
-          <div className="text-muted" style={{ textAlign: "center", fontSize: 11, marginBottom: 10 }}>— ou colle une invoice —</div>
+          <div className="text-secondary" style={{ fontWeight: 600, marginBottom: 12 }}><ArrowUpRight size={16} style={{ verticalAlign: "middle" }} /> {t("taproot.payInvoice")}</div>
+          <button className="btn btn-primary" style={{ width: "100%", marginBottom: 12 }} onClick={() => scanInto((v) => { setLnPayReq(v); setLnDecoded(null); })}><ScanLine size={18} /> {t("taproot.scanQr")}</button>
+          <div className="text-muted" style={{ textAlign: "center", fontSize: 11, marginBottom: 10 }}>{t("taproot.orPasteInvoice")}</div>
           <input className="input" placeholder="lnbc…" value={lnPayReq} onChange={(e) => { setLnPayReq(e.target.value); setLnDecoded(null); }} style={{ marginBottom: 11 }} />
           {lnDecoded && (
             <div style={{ ...inner, marginBottom: 11, borderColor: "rgba(0,240,255,0.22)" }}>
               <div style={{ fontWeight: 700 }}>{lnDecoded.asset_amount.toLocaleString()} {nameById[lnAssetId] || "asset"} <span className="text-muted" style={{ fontWeight: 400 }}>≈ {lnDecoded.sat_amount.toLocaleString()} sat</span></div>
               <div className="text-muted" style={{ fontSize: 12 }}>{lnDecoded.description || "(sans description)"}</div>
-              <div className="text-muted" style={{ fontSize: 11, marginTop: 6 }}>↳ payé via ton canal d'assets · peer auto ✓</div>
+              <div className="text-muted" style={{ fontSize: 11, marginTop: 6 }}>{t("taproot.paidViaChannel")}</div>
             </div>
           )}
           <div style={{ display: "flex", gap: 10 }}>
-            <button className="btn btn-secondary" style={{ flex: 1 }} onClick={decodeLnInvoice} disabled={loading || !lnPayReq || !lnAssetId}>Décoder</button>
-            <button className="btn btn-primary" style={{ flex: 1 }} onClick={payLnInvoice} disabled={loading || !lnPayReq || !lnAssetId}>{loading ? <span className="spinner" /> : <Zap size={16} />} Payer</button>
+            <button className="btn btn-secondary" style={{ flex: 1 }} onClick={decodeLnInvoice} disabled={loading || !lnPayReq || !lnAssetId}>{t("taproot.decode")}</button>
+            <button className="btn btn-primary" style={{ flex: 1 }} onClick={payLnInvoice} disabled={loading || !lnPayReq || !lnAssetId}>{loading ? <span className="spinner" /> : <Zap size={16} />} {t("taproot.pay")}</button>
           </div>
           <details style={{ marginTop: 12 }}>
-            <summary className="text-muted" style={{ fontSize: 11, cursor: "pointer" }}>Peer (avancé — auto par défaut, laisser vide)</summary>
-            <input className="input" placeholder="Peer pubkey (hex)" value={lnPeer} onChange={(e) => setLnPeer(e.target.value)} style={{ marginTop: 8 }} />
+            <summary className="text-muted" style={{ fontSize: 11, cursor: "pointer" }}>{t("taproot.peerAdvanced")}</summary>
+            <input className="input" placeholder={t("taproot.peerPlaceholder")} value={lnPeer} onChange={(e) => setLnPeer(e.target.value)} style={{ marginTop: 8 }} />
           </details>
         </div>
 
         {/* RECEIVE */}
         <div className="glass-card" style={{ padding: 20, marginBottom: 14 }}>
-          <div className="text-secondary" style={{ fontWeight: 600, marginBottom: 12 }}><ArrowDownLeft size={16} style={{ verticalAlign: "middle" }} /> Recevoir en assets</div>
-          <input className="input" type="number" placeholder="Montant (assets)" value={lnRecvAmount} onChange={(e) => setLnRecvAmount(e.target.value)} style={{ marginBottom: 10 }} />
-          <input className="input" placeholder="Mémo (optionnel)" value={lnMemo} onChange={(e) => setLnMemo(e.target.value)} style={{ marginBottom: 10 }} />
-          <button className="btn btn-secondary" style={{ width: "100%" }} onClick={createLnInvoice} disabled={loading || !lnAssetId || !lnRecvAmount}>Créer une invoice</button>
+          <div className="text-secondary" style={{ fontWeight: 600, marginBottom: 12 }}><ArrowDownLeft size={16} style={{ verticalAlign: "middle" }} /> {t("taproot.receiveAssets")}</div>
+          <input className="input" type="number" placeholder={t("taproot.amountAssets")} value={lnRecvAmount} onChange={(e) => setLnRecvAmount(e.target.value)} style={{ marginBottom: 10 }} />
+          <input className="input" placeholder={t("taproot.memoOptional")} value={lnMemo} onChange={(e) => setLnMemo(e.target.value)} style={{ marginBottom: 10 }} />
+          <button className="btn btn-secondary" style={{ width: "100%" }} onClick={createLnInvoice} disabled={loading || !lnAssetId || !lnRecvAmount}>{t("taproot.createInvoice")}</button>
           {lnBolt11 && (
             <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 12, marginTop: 14 }}>
               <QRImage value={lnBolt11} />
@@ -1037,14 +1037,14 @@ export function TaprootAssets({ onBack }: TaprootAssetsProps) {
         </div>
 
         <details className="glass-card" style={{ padding: 16, marginBottom: 14 }}>
-          <summary className="text-secondary" style={{ fontWeight: 600, cursor: "pointer" }}>Ouvrir un canal d'assets</summary>
-          <input className="input" type="number" placeholder="Montant d'assets à engager" value={chanAmount} onChange={(e) => setChanAmount(e.target.value)} style={{ margin: "12px 0 10px" }} />
-          <input className="input" type="number" placeholder="Frais sat/vB" value={chanFee} onChange={(e) => setChanFee(e.target.value)} style={{ marginBottom: 12 }} />
-          <button className="btn btn-secondary" style={{ width: "100%" }} onClick={fundChannel} disabled={loading || !lnAssetId || !chanAmount || !lnPeer}>Ouvrir le canal</button>
+          <summary className="text-secondary" style={{ fontWeight: 600, cursor: "pointer" }}>{t("taproot.openChannel")}</summary>
+          <input className="input" type="number" placeholder={t("taproot.assetsToCommit")} value={chanAmount} onChange={(e) => setChanAmount(e.target.value)} style={{ margin: "12px 0 10px" }} />
+          <input className="input" type="number" placeholder={t("taproot.feeSatVb")} value={chanFee} onChange={(e) => setChanFee(e.target.value)} style={{ marginBottom: 12 }} />
+          <button className="btn btn-secondary" style={{ width: "100%" }} onClick={fundChannel} disabled={loading || !lnAssetId || !chanAmount || !lnPeer}>{t("taproot.openTheChannel")}</button>
         </details>
 
         {rfqQuotes && (
-          <div className="text-muted" style={{ textAlign: "center", fontSize: 11 }}>⚡ RFQ : {rfqQuotes.buy_quotes} achat · {rfqQuotes.sell_quotes} vente</div>
+          <div className="text-muted" style={{ textAlign: "center", fontSize: 11 }}>⚡ RFQ : {rfqQuotes.buy_quotes} {t("taproot.rfqBuy")} · {rfqQuotes.sell_quotes} {t("taproot.rfqSell")}</div>
         )}
       </>
     );
@@ -1054,13 +1054,13 @@ export function TaprootAssets({ onBack }: TaprootAssetsProps) {
     return (
       <>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", margin: "6px 0 14px" }}>
-          <span className="title-lg">Activité</span>
+          <span className="title-lg">{t("taproot.activity")}</span>
           <button className="btn btn-ghost" onClick={fetchExtras} disabled={loading}><RefreshCw size={16} /> {t("refresh")}</button>
         </div>
 
         <div className="glass-card" style={{ padding: 20, marginBottom: 14 }}>
-          <div className="text-secondary" style={{ fontWeight: 600, marginBottom: 12 }}>Transferts ({transfers.length})</div>
-          {transfers.length === 0 ? <div className="text-muted">Aucun transfert</div> : transfers.map((tr) => (
+          <div className="text-secondary" style={{ fontWeight: 600, marginBottom: 12 }}>{t("taproot.transfers")} ({transfers.length})</div>
+          {transfers.length === 0 ? <div className="text-muted">{t("taproot.noTransfers")}</div> : transfers.map((tr) => (
             <div key={tr.anchor_txid + tr.timestamp} style={{ ...inner, marginBottom: 8 }}>
               <div style={{ fontWeight: 600 }}>{tr.total_out.toLocaleString()} · {tr.inputs}→{tr.outputs}</div>
               <div className="text-muted" style={{ fontSize: 11 }}>{new Date(tr.timestamp * 1000).toLocaleString()} · bloc ~{tr.height_hint}</div>
@@ -1070,8 +1070,8 @@ export function TaprootAssets({ onBack }: TaprootAssetsProps) {
         </div>
 
         <div className="glass-card" style={{ padding: 20, marginBottom: 14 }}>
-          <div className="text-secondary" style={{ fontWeight: 600, marginBottom: 12 }}>Réceptions ({receives.length})</div>
-          {receives.length === 0 ? <div className="text-muted">Aucune réception</div> : receives.map((r, i) => (
+          <div className="text-secondary" style={{ fontWeight: 600, marginBottom: 12 }}>{t("taproot.receives")} ({receives.length})</div>
+          {receives.length === 0 ? <div className="text-muted">{t("taproot.noReceives")}</div> : receives.map((r, i) => (
             <div key={r.outpoint + i} style={{ ...inner, marginBottom: 8 }}>
               <div style={{ fontWeight: 600 }}>{r.status}</div>
               <div className="text-muted" style={{ fontSize: 11 }}>{new Date(r.timestamp * 1000).toLocaleString()} · {r.utxo_amt_sat.toLocaleString()} sat</div>
@@ -1081,10 +1081,10 @@ export function TaprootAssets({ onBack }: TaprootAssetsProps) {
 
         <div className="glass-card" style={{ padding: 20, marginBottom: 14 }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
-            <span className="text-secondary" style={{ fontWeight: 600 }}>Mints / batches ({batches.length})</span>
-            <button className="btn btn-ghost" onClick={cancelBatch} disabled={loading} style={{ fontSize: 12 }}>Annuler en attente</button>
+            <span className="text-secondary" style={{ fontWeight: 600 }}>{t("taproot.batches")} ({batches.length})</span>
+            <button className="btn btn-ghost" onClick={cancelBatch} disabled={loading} style={{ fontSize: 12 }}>{t("taproot.cancelPending")}</button>
           </div>
-          {batches.length === 0 ? <div className="text-muted">Aucun batch</div> : batches.map((b) => (
+          {batches.length === 0 ? <div className="text-muted">{t("taproot.noBatches")}</div> : batches.map((b) => (
             <div key={b.batch_key} style={{ ...inner, marginBottom: 8 }}>
               <div style={{ fontWeight: 600 }}>{b.state} · {b.assets} asset(s)</div>
               {b.batch_txid && <div className="text-muted" style={{ fontSize: 11, fontFamily: "var(--font-mono)", wordBreak: "break-all" }}>tx: {b.batch_txid}</div>}
@@ -1094,7 +1094,7 @@ export function TaprootAssets({ onBack }: TaprootAssetsProps) {
 
         {burns.length > 0 && (
           <div className="glass-card" style={{ padding: 20 }}>
-            <div className="text-secondary" style={{ fontWeight: 600, marginBottom: 12 }}>Burns ({burns.length})</div>
+            <div className="text-secondary" style={{ fontWeight: 600, marginBottom: 12 }}>{t("taproot.burns")} ({burns.length})</div>
             {burns.map((b, i) => (
               <div key={b.anchor_txid + i} className="text-muted" style={{ fontSize: 11, fontFamily: "var(--font-mono)", wordBreak: "break-all", marginBottom: 6 }}>
                 <span style={{ color: "var(--danger)" }}>−{b.amount}</span> · {nameById[b.asset_id] || b.asset_id}
@@ -1109,12 +1109,12 @@ export function TaprootAssets({ onBack }: TaprootAssetsProps) {
   function renderAdvanced() {
     return (
       <>
-        <div className="title-lg" style={{ margin: "6px 0 14px" }}><Settings size={20} style={{ verticalAlign: "middle" }} /> Avancé</div>
+        <div className="title-lg" style={{ margin: "6px 0 14px" }}><Settings size={20} style={{ verticalAlign: "middle" }} /> {t("taproot.advanced")}</div>
 
         {nodeInfo && (
           <div className="glass-card" style={{ padding: 20, marginBottom: 14 }}>
-            <div className="text-secondary" style={{ fontWeight: 600, marginBottom: 12 }}>Nœud tapd</div>
-            <div className="text-muted" style={{ fontSize: 12 }}>Réseau : {nodeInfo.network}</div>
+            <div className="text-secondary" style={{ fontWeight: 600, marginBottom: 12 }}>{t("taproot.nodeTapd")}</div>
+            <div className="text-muted" style={{ fontSize: 12 }}>{t("taproot.network")} : {nodeInfo.network}</div>
             <div className="text-muted" style={{ fontSize: 12 }}>tapd : {nodeInfo.version}</div>
             <div className="text-muted" style={{ fontSize: 12 }}>lnd : {nodeInfo.lnd_version}</div>
             <div className="text-muted" style={{ fontSize: 11, fontFamily: "var(--font-mono)", wordBreak: "break-all" }}>{nodeInfo.lnd_pubkey}</div>
@@ -1130,12 +1130,12 @@ export function TaprootAssets({ onBack }: TaprootAssetsProps) {
             <div className="text-muted" style={{ fontSize: 12, marginBottom: 10 }}>{universeStats.num_assets} assets · {universeStats.num_groups} groupes · {universeStats.num_syncs} syncs · {universeStats.num_proofs} preuves</div>
           )}
           <div style={{ display: "flex", gap: 10, marginBottom: 12 }}>
-            <input className="input" placeholder="Universe host (ex: universe.lightning.finance:10029)" value={syncHost} onChange={(e) => setSyncHost(e.target.value)} />
-            <button className="btn btn-secondary" style={{ flex: "none" }} onClick={doSyncUniverse} disabled={loading || !syncHost}>Sync</button>
+            <input className="input" placeholder={t("taproot.universeHost")} value={syncHost} onChange={(e) => setSyncHost(e.target.value)} />
+            <button className="btn btn-secondary" style={{ flex: "none" }} onClick={doSyncUniverse} disabled={loading || !syncHost}>{t("taproot.syncBtn")}</button>
           </div>
           {universeRoots.map((r) => (
             <div key={r.asset_id} style={{ ...inner, marginBottom: 8 }}>
-              <div style={{ fontWeight: 600 }}>{r.asset_name || "(sans nom)"}</div>
+              <div style={{ fontWeight: 600 }}>{r.asset_name || t("taproot.noName")}</div>
               <div className="text-muted" style={{ fontSize: 11, fontFamily: "var(--font-mono)", wordBreak: "break-all" }}>{r.asset_id}</div>
             </div>
           ))}
@@ -1157,11 +1157,11 @@ export function TaprootAssets({ onBack }: TaprootAssetsProps) {
         </div>
 
         <div className="glass-card" style={{ padding: 20 }}>
-          <div className="text-secondary" style={{ fontWeight: 600, marginBottom: 12 }}>Connexion</div>
+          <div className="text-secondary" style={{ fontWeight: 600, marginBottom: 12 }}>{t("taproot.connection")}</div>
           <label style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10, cursor: "pointer" }}>
             <input type="checkbox" checked={useTor} onChange={(e) => { setUseTor(e.target.checked); }} /> <span className="text-muted" style={{ fontSize: 13 }}>{t("taproot.useTor")} — {torStatus}</span>
           </label>
-          <button className="btn btn-ghost" onClick={changeNode} style={{ width: "100%" }}>Changer de nœud</button>
+          <button className="btn btn-ghost" onClick={changeNode} style={{ width: "100%" }}>{t("taproot.changeNode")}</button>
         </div>
       </>
     );
@@ -1193,7 +1193,7 @@ export function TaprootAssets({ onBack }: TaprootAssetsProps) {
       {connected && (
         <div style={{ display: "flex", alignItems: "center", gap: 7, padding: "0 18px 6px" }}>
           <span style={{ width: 7, height: 7, borderRadius: "50%", background: "var(--success)", boxShadow: "0 0 8px var(--success)" }} />
-          <span className="text-muted" style={{ fontSize: 11 }}>Connecté{useTor ? " · via Tor" : ""}{nodeInfo ? ` · ${nodeInfo.network}` : ""}</span>
+          <span className="text-muted" style={{ fontSize: 11 }}>{t("taproot.connectedStatus")}{useTor ? " · " + t("taproot.viaTor") : ""}{nodeInfo ? ` · ${nodeInfo.network}` : ""}</span>
         </div>
       )}
 
@@ -1209,7 +1209,7 @@ export function TaprootAssets({ onBack }: TaprootAssetsProps) {
           <div style={{ position: "absolute", bottom: 88, right: 16, zIndex: 25 }}>
             <button
               onClick={() => setMintOpen(true)}
-              title="Émettre un asset"
+              title={t("taproot.mintTitle")}
               style={{ width: 56, height: 56, borderRadius: 18, border: "none", cursor: "pointer", color: "#000", background: "linear-gradient(135deg, var(--accent-cyan), var(--accent-purple))", boxShadow: "0 10px 30px rgba(0,240,255,0.35)", display: "grid", placeItems: "center" }}
             >
               <Plus size={26} />
@@ -1234,7 +1234,7 @@ export function TaprootAssets({ onBack }: TaprootAssetsProps) {
       {mintOpen && (
         <div style={{ position: "absolute", inset: 0, background: "var(--bg-primary)", zIndex: 30, display: "flex", flexDirection: "column", padding: "20px 16px 16px", overflowY: "auto" }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
-            <span className="title-lg"><Plus size={20} style={{ verticalAlign: "middle" }} /> Émettre un asset</span>
+            <span className="title-lg"><Plus size={20} style={{ verticalAlign: "middle" }} /> {t("taproot.mintTitle")}</span>
             <button className="btn btn-ghost" onClick={() => setMintOpen(false)} style={{ padding: "8px 10px" }}><X size={18} /></button>
           </div>
           <div className="glass-card" style={{ padding: 20 }}>
@@ -1242,14 +1242,14 @@ export function TaprootAssets({ onBack }: TaprootAssetsProps) {
             <input className="input" type="number" placeholder={t("taproot.mintSupply")} value={mintAmount} onChange={(e) => setMintAmount(e.target.value)} style={{ marginBottom: 10 }} disabled={mintCollectible} />
             <input className="input" placeholder={t("taproot.mintMetadata")} value={mintMeta} onChange={(e) => setMintMeta(e.target.value)} style={{ marginBottom: 12 }} />
             <label style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10, cursor: "pointer" }}>
-              <input type="checkbox" checked={mintCollectible} onChange={(e) => setMintCollectible(e.target.checked)} /> <span className="text-secondary" style={{ fontSize: 13 }}>Collectible (NFT)</span>
+              <input type="checkbox" checked={mintCollectible} onChange={(e) => setMintCollectible(e.target.checked)} /> <span className="text-secondary" style={{ fontSize: 13 }}>{t("taproot.collectible")}</span>
             </label>
             <label style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12, cursor: "pointer" }}>
-              <input type="checkbox" checked={mintNewGroup} onChange={(e) => setMintNewGroup(e.target.checked)} /> <span className="text-secondary" style={{ fontSize: 13 }}>Nouveau groupe</span>
+              <input type="checkbox" checked={mintNewGroup} onChange={(e) => setMintNewGroup(e.target.checked)} /> <span className="text-secondary" style={{ fontSize: 13 }}>{t("taproot.newGroup")}</span>
             </label>
-            <input className="input" type="number" placeholder="Frais sat/vB (0 = auto)" value={mintFee} onChange={(e) => setMintFee(e.target.value)} style={{ marginBottom: 12 }} />
+            <input className="input" type="number" placeholder={t("taproot.feeAuto")} value={mintFee} onChange={(e) => setMintFee(e.target.value)} style={{ marginBottom: 12 }} />
             {errorBox}
-            <button className="btn btn-primary" style={{ width: "100%" }} onClick={mint} disabled={loading || !mintName || (!mintCollectible && !mintAmount)}>{loading ? <span className="spinner" /> : <Plus size={16} />} Finaliser le batch</button>
+            <button className="btn btn-primary" style={{ width: "100%" }} onClick={mint} disabled={loading || !mintName || (!mintCollectible && !mintAmount)}>{loading ? <span className="spinner" /> : <Plus size={16} />} {t("taproot.finalizeBatch")}</button>
           </div>
         </div>
       )}
@@ -1259,13 +1259,13 @@ export function TaprootAssets({ onBack }: TaprootAssetsProps) {
         <div style={{ position: "absolute", inset: 0, zIndex: 40, background: "rgba(2,4,7,0.72)", backdropFilter: "blur(4px)", display: "flex", alignItems: "center", justifyContent: "center", padding: 22 }}>
           <div className="glass-card" style={{ padding: 22, width: "100%", maxWidth: 330 }}>
             <div style={{ width: 52, height: 52, borderRadius: 16, background: "rgba(239,68,68,0.12)", border: "1px solid rgba(239,68,68,0.3)", display: "grid", placeItems: "center", margin: "0 auto 12px", color: "var(--danger)" }}><Flame size={24} /></div>
-            <h3 style={{ textAlign: "center", fontSize: 17, marginBottom: 6 }}>Brûler {burnTarget.name || "cet asset"} ?</h3>
-            <p className="text-muted" style={{ textAlign: "center", fontSize: 13, marginBottom: 16 }}>Cette action détruit définitivement les assets. <b>Irréversible.</b></p>
-            <label className="text-muted" style={{ fontSize: 11, display: "block", marginBottom: 6 }}>Montant à brûler (max {fmtAmount(burnTarget.amount, burnTarget.decimal_display)})</label>
+            <h3 style={{ textAlign: "center", fontSize: 17, marginBottom: 6 }}>{t("taproot.burnAction")} {burnTarget.name || t("taproot.noName")} ?</h3>
+            <p className="text-muted" style={{ textAlign: "center", fontSize: 13, marginBottom: 16 }}>{t("taproot.burnWarning")}</p>
+            <label className="text-muted" style={{ fontSize: 11, display: "block", marginBottom: 6 }}>{t("taproot.burnAmount")} ({t("taproot.max")} {fmtAmount(burnTarget.amount, burnTarget.decimal_display)})</label>
             <input className="input" type="number" value={burnModalAmt} onChange={(e) => setBurnModalAmt(e.target.value)} style={{ marginBottom: 14 }} />
             <div style={{ display: "flex", gap: 10 }}>
-              <button className="btn btn-secondary" style={{ flex: 1 }} onClick={() => setBurnTarget(null)}>Annuler</button>
-              <button className="btn btn-danger" style={{ flex: 1 }} onClick={confirmBurn} disabled={loading || !burnModalAmt || Number(burnModalAmt) <= 0}>{loading ? <span className="spinner" /> : <Flame size={16} />} Brûler</button>
+              <button className="btn btn-secondary" style={{ flex: 1 }} onClick={() => setBurnTarget(null)}>{t("cancel")}</button>
+              <button className="btn btn-danger" style={{ flex: 1 }} onClick={confirmBurn} disabled={loading || !burnModalAmt || Number(burnModalAmt) <= 0}>{loading ? <span className="spinner" /> : <Flame size={16} />} {t("taproot.burnAction")}</button>
             </div>
           </div>
         </div>
