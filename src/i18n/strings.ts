@@ -235,6 +235,9 @@ export const translations = {
       max: "max",
       connectedStatus: "Connecté",
       viaTor: "via Tor",
+      retryDefault: "Réessayer le nœud par défaut",
+      connectCustom: "Connecter un nœud manuel",
+      noDefaultDetected: "Aucun nœud par défaut détecté — utilise le formulaire ci-dessus.",
     },
 
     // NFC
@@ -520,6 +523,9 @@ export const translations = {
       max: "max",
       connectedStatus: "Connected",
       viaTor: "via Tor",
+      retryDefault: "Retry default node",
+      connectCustom: "Connect a custom node",
+      noDefaultDetected: "No default node detected — use the form above.",
     },
 
     // NFC

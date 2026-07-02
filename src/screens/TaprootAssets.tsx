@@ -369,27 +369,42 @@ export function TaprootAssets({ onBack }: TaprootAssetsProps) {
 
   // Connect to the embedded default node directly, no password required.
   async function connectDefaultNode() {
-    setLoading(true);
     setError("");
-    try {
-      await invoke("connect_default_tapd");
-      setConnected(true);
-      setAutoConnecting(false);
-      notify(t("taproot.connected"), "success");
-      await fetchAssets();
-    } catch (e) {
-      const msg = String(e);
-      if (msg.includes("no default tapd node is configured")) {
-        setError(
-          "Aucun nœud par défaut n'est configuré. Le wallet doit être compilé avec les variables d'environnement OZARK_DEFAULT_TAPD_HOST, OZARK_DEFAULT_TAPD_CERT et OZARK_DEFAULT_TAPD_MACAROON, ou avec un fichier tapd-defaults.json. Veuillez vous connecter manuellement avec l'adresse de votre nœud."
-        );
-      } else {
+    setAutoConnecting(true);
+    // Arti's first onion connection is often flaky ("Protocol error while
+    // launching a data stream"); the descriptor gets cached, so retry a few times.
+    const maxAttempts = 3;
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      setConnectStatus(
+        attempt === 1
+          ? "Connexion au nœud par défaut via Tor…"
+          : `Nouvelle tentative ${attempt}/${maxAttempts} via Tor… (1ʳᵉ connexion onion souvent lente)`
+      );
+      try {
+        await invoke("connect_default_tapd");
+        setConnected(true);
+        setAutoConnecting(false);
+        notify(t("taproot.connected"), "success");
+        await fetchAssets();
+        refreshTorStatus();
+        return;
+      } catch (e) {
+        const msg = String(e);
+        if (msg.includes("no default tapd node is configured")) {
+          setError(
+            "Aucun nœud par défaut n'est configuré. Le wallet doit être compilé avec les variables d'environnement OZARK_DEFAULT_TAPD_HOST, OZARK_DEFAULT_TAPD_CERT et OZARK_DEFAULT_TAPD_MACAROON, ou avec un fichier tapd-defaults.json. Veuillez vous connecter manuellement avec l'adresse de votre nœud."
+          );
+          break;
+        }
+        if (attempt < maxAttempts) {
+          await new Promise((r) => setTimeout(r, 3000));
+          continue;
+        }
         setError(msg);
       }
-    } finally {
-      setLoading(false);
-      refreshTorStatus();
     }
+    setAutoConnecting(false);
+    refreshTorStatus();
   }
 
   // Disconnect so the user can connect to a different (e.g. their own) tapd node.
@@ -845,14 +860,14 @@ export function TaprootAssets({ onBack }: TaprootAssetsProps) {
           {t("taproot.forceTor")}
         </label>
         {errorBox}
-        {hasDefaults && (
-          <button className="btn btn-ghost" onClick={connectDefaultNode} disabled={loading} style={{ marginBottom: 12, width: "100%" }}>
-            {t("taproot.defaultNode")}
-          </button>
+        <button className="btn btn-primary" onClick={connectDefaultNode} disabled={loading} style={{ marginBottom: 10, width: "100%" }}>
+          {loading ? <span className="spinner" /> : <RefreshCw size={18} />} {t("taproot.retryDefault")}
+        </button>
+        {!hasDefaults && (
+          <div className="text-muted" style={{ fontSize: 11, marginBottom: 10 }}>{t("taproot.noDefaultDetected")}</div>
         )}
-        <button className="btn btn-primary" onClick={connect} disabled={loading} style={{ width: "100%" }}>
-          {loading ? <span className="spinner" /> : <Link size={18} />}
-          {loading ? t("loading") : t("taproot.connect")}
+        <button className="btn btn-secondary" onClick={connect} disabled={loading} style={{ width: "100%" }}>
+          <Link size={18} /> {t("taproot.connectCustom")}
         </button>
       </motion.div>
     );
