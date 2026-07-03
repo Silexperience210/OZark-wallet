@@ -23,6 +23,7 @@ import { useI18n } from "../i18n/I18nContext";
 import { useNotification } from "../contexts/NotificationContext";
 import { MainnetBanner } from "../components/MainnetBanner";
 import { PasswordPrompt } from "../components/PasswordPrompt";
+import { classifyPaymentInput } from "../lib/paymentInput";
 
 interface DashboardProps {
   onLogout: () => void;
@@ -31,9 +32,10 @@ interface DashboardProps {
   onLightning: () => void;
   onArk: () => void;
   onHistory: () => void;
+  onLightningPay?: (invoice: string) => void;
 }
 
-export function Dashboard({ onLogout, onBackup, onTaproot, onLightning, onArk, onHistory }: DashboardProps) {
+export function Dashboard({ onLogout, onBackup, onTaproot, onLightning, onArk, onHistory, onLightningPay }: DashboardProps) {
   const { t, lang, setLang } = useI18n();
   const { notify } = useNotification();
   const [showSeed, setShowSeed] = useState(false);
@@ -55,6 +57,38 @@ export function Dashboard({ onLogout, onBackup, onTaproot, onLightning, onArk, o
   const [network, setNetwork] = useState("signet");
   const [passwordPromptOpen, setPasswordPromptOpen] = useState(false);
   const [fiatRate, setFiatRate] = useState<{ EUR: number; USD: number } | null>(null);
+  const [smartInput, setSmartInput] = useState("");
+
+  function smartSend() {
+    const s = smartInput.trim();
+    if (!s) return;
+    const { kind, value } = classifyPaymentInput(s);
+    setSmartInput("");
+    switch (kind) {
+      case "onchain":
+        setSendAddress(value);
+        setShowSend(true);
+        break;
+      case "lightning":
+        if (onLightningPay) onLightningPay(value);
+        else onLightning();
+        break;
+      case "asset":
+        notify("Adresse Taproot Asset détectée → Assets", "success");
+        onTaproot();
+        break;
+      case "ark":
+        notify("Adresse Ark détectée → Ark", "success");
+        onArk();
+        break;
+      case "lnurl":
+      case "lnaddress":
+        notify("LNURL / Lightning Address — support à venir", "error");
+        break;
+      default:
+        notify("Type non reconnu (adresse / facture)", "error");
+    }
+  }
 
   useEffect(() => {
     fetchAddress();
@@ -306,6 +340,23 @@ export function Dashboard({ onLogout, onBackup, onTaproot, onLightning, onArk, o
           </div>
         )}
       </motion.div>
+
+      <div className="glass-card" style={{ padding: "14px 16px", marginBottom: "20px" }}>
+        <div className="text-muted" style={{ fontSize: 12, marginBottom: 8 }}>Payer / Envoyer — colle n'importe quoi</div>
+        <div style={{ display: "flex", gap: 8 }}>
+          <input
+            className="input"
+            style={{ flex: 1 }}
+            placeholder="bc1… · ark1… · tapbc1… · lnbc… · LNURL · user@domaine"
+            value={smartInput}
+            onChange={(e) => setSmartInput(e.target.value)}
+            onKeyDown={(e) => { if (e.key === "Enter") smartSend(); }}
+          />
+          <button className="btn btn-primary" style={{ flex: "none" }} onClick={smartSend} disabled={!smartInput.trim()}>
+            <Send size={16} />
+          </button>
+        </div>
+      </div>
 
       <motion.div
         initial={{ opacity: 0 }}

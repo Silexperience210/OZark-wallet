@@ -191,6 +191,7 @@ function AppContent() {
               onLightning={() => setScreen("lightning")}
               onArk={() => setScreen("ark")}
               onHistory={() => setScreen("history")}
+              onLightningPay={(inv) => setPendingInvoice(inv)}
             />
           )}
           {screen === "history" && (
