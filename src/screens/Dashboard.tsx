@@ -246,15 +246,6 @@ export function Dashboard({ onLogout, onBackup, onTaproot, onLightning, onArk, o
           <p className="text-muted">{t("dashboard.subtitle")}</p>
         </div>
         <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
-          <button className="btn btn-ghost" onClick={onArk}>
-            <Zap size={18} /> {t("dashboard.ark")}
-          </button>
-          <button className="btn btn-ghost" onClick={onLightning}>
-            <Shield size={18} /> {t("dashboard.lightning")}
-          </button>
-          <button className="btn btn-ghost" onClick={onTaproot}>
-            <Layers size={18} /> {t("dashboard.taproot")}
-          </button>
           <button className="btn btn-ghost" onClick={onHistory}>
             <History size={18} /> {t("dashboard.history")}
           </button>
@@ -328,18 +319,20 @@ export function Dashboard({ onLogout, onBackup, onTaproot, onLightning, onArk, o
         }}
       >
         <AssetCard icon={<Bitcoin size={20} />} name={t("dashboard.onchainBalance")} balance={`${btc} BTC`} color="#f59e0b" />
-        <AssetCard icon={<Zap size={20} />} name={t("dashboard.arkBalance")} balance={`${(arkBalance / 100_000_000).toFixed(8)} vBTC`} color="#00f0ff" />
+        <AssetCard icon={<Zap size={20} />} name={t("dashboard.arkBalance")} balance={`${(arkBalance / 100_000_000).toFixed(8)} vBTC`} color="#00f0ff" onClick={onArk} />
         <AssetCard
           icon={<Layers size={20} />}
           name="Taproot Assets"
           balance={taprootTokens === null ? "—" : `${taprootTokens} ${taprootTokens === 1 ? "asset" : "assets"}`}
           color="#a855f7"
+          onClick={onTaproot}
         />
         <AssetCard
           icon={<Shield size={20} />}
           name="Lightning (via Ark)"
           balance={`${arkBalance.toLocaleString()} sats`}
           color="#f97316"
+          onClick={onLightning}
         />
       </motion.div>
 
@@ -559,22 +552,33 @@ function AssetCard({
   name,
   balance,
   color,
+  onClick,
 }: {
   icon: React.ReactNode;
   name: string;
   balance: string;
   color: string;
+  onClick?: () => void;
 }) {
   return (
     <div
+      onClick={onClick}
+      role={onClick ? "button" : undefined}
       style={{
         padding: "16px",
         background: "rgba(255,255,255,0.03)",
         borderRadius: "16px",
         border: "1px solid var(--border)",
+        cursor: onClick ? "pointer" : "default",
+        transition: "border-color 0.15s ease",
       }}
+      onMouseEnter={onClick ? (e) => (e.currentTarget.style.borderColor = color) : undefined}
+      onMouseLeave={onClick ? (e) => (e.currentTarget.style.borderColor = "var(--border)") : undefined}
     >
-      <div style={{ color, marginBottom: "8px" }}>{icon}</div>
+      <div style={{ color, marginBottom: "8px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+        {icon}
+        {onClick && <span className="text-muted" style={{ fontSize: 18, lineHeight: 1 }}>›</span>}
+      </div>
       <div className="text-muted" style={{ fontSize: "12px", marginBottom: "4px" }}>
         {name}
       </div>
