@@ -818,6 +818,42 @@ pub async fn sync_universe(state: State<'_, WalletState>, host: String) -> Resul
 }
 
 #[command]
+pub async fn list_federation_servers(state: State<'_, WalletState>) -> Result<Vec<String>, String> {
+    let mut guard = state.taproot.lock().await;
+    let client = guard.as_mut().ok_or("tapd not connected")?;
+    client
+        .list_federation_servers()
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[command]
+pub async fn add_federation_server(
+    state: State<'_, WalletState>,
+    host: String,
+) -> Result<(), String> {
+    let mut guard = state.taproot.lock().await;
+    let client = guard.as_mut().ok_or("tapd not connected")?;
+    client
+        .add_federation_server(&host)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[command]
+pub async fn delete_federation_server(
+    state: State<'_, WalletState>,
+    host: String,
+) -> Result<(), String> {
+    let mut guard = state.taproot.lock().await;
+    let client = guard.as_mut().ok_or("tapd not connected")?;
+    client
+        .delete_federation_server(&host)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[command]
 pub async fn decode_asset_invoice(
     state: State<'_, WalletState>,
     pay_req: String,

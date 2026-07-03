@@ -203,6 +203,7 @@ export function TaprootAssets({ onBack }: TaprootAssetsProps) {
   const [metas, setMetas] = useState<Record<string, AssetMeta>>({});
   const [universeStats, setUniverseStats] = useState<UniverseStats | null>(null);
   const [universeRoots, setUniverseRoots] = useState<UniverseRoot[]>([]);
+  const [fedServers, setFedServers] = useState<string[]>([]);
   const [syncHost, setSyncHost] = useState("");
 
   // Lightning assets (litd)
@@ -598,6 +599,7 @@ export function TaprootAssets({ onBack }: TaprootAssetsProps) {
     try { setNodeInfo(await invoke<NodeInfo>("get_taproot_info")); } catch {}
     try { setUniverseStats(await invoke<UniverseStats>("get_universe_stats")); } catch {}
     try { setUniverseRoots(await invoke<UniverseRoot[]>("list_universe_roots")); } catch {}
+    try { setFedServers(await invoke<string[]>("list_federation_servers")); } catch {}
     try { setRfqQuotes(await invoke<RfqQuotes>("list_rfq_quotes")); } catch {}
   }
 
@@ -688,6 +690,38 @@ export function TaprootAssets({ onBack }: TaprootAssetsProps) {
       notify(`Universe sync : ${n} univers`, "success");
       await fetchExtras();
       await fetchAssets();
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function addFederation() {
+    const host = syncHost.trim();
+    if (!host) return;
+    setLoading(true);
+    setError("");
+    try {
+      await invoke("add_federation_server", { host });
+      notify(t("taproot.fedAdded"), "success");
+      setSyncHost("");
+      await fetchExtras();
+      await fetchAssets();
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function removeFederation(host: string) {
+    setLoading(true);
+    setError("");
+    try {
+      await invoke("delete_federation_server", { host });
+      notify(t("taproot.fedRemoved"), "success");
+      await fetchExtras();
     } catch (e) {
       setError(String(e));
     } finally {
@@ -1198,10 +1232,25 @@ export function TaprootAssets({ onBack }: TaprootAssetsProps) {
           {universeStats && (
             <div className="text-muted" style={{ fontSize: 12, marginBottom: 10 }}>{universeStats.num_assets} assets · {universeStats.num_groups} groupes · {universeStats.num_syncs} syncs · {universeStats.num_proofs} preuves</div>
           )}
-          <div style={{ display: "flex", gap: 10, marginBottom: 12 }}>
+          <div style={{ display: "flex", gap: 10, marginBottom: 8 }}>
             <input className="input" placeholder={t("taproot.universeHost")} value={syncHost} onChange={(e) => setSyncHost(e.target.value)} />
             <button className="btn btn-secondary" style={{ flex: "none" }} onClick={doSyncUniverse} disabled={loading || !syncHost}>{t("taproot.syncBtn")}</button>
           </div>
+          <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
+            <button className="btn btn-ghost" style={{ flex: "none", fontSize: 12, padding: "4px 10px" }} onClick={() => setSyncHost("universe.lightning.finance:10029")} disabled={loading}>{t("taproot.fedDefault")}</button>
+            <button className="btn btn-secondary" style={{ flex: 1, fontSize: 13 }} onClick={addFederation} disabled={loading || !syncHost}>+ {t("taproot.fedAdd")}</button>
+          </div>
+          {fedServers.length > 0 && (
+            <div style={{ marginBottom: 12 }}>
+              <div className="text-muted" style={{ fontSize: 11, marginBottom: 6 }}>{t("taproot.fedMembers")}</div>
+              {fedServers.map((h) => (
+                <div key={h} style={{ ...inner, display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
+                  <span style={{ flex: 1, fontSize: 12, fontFamily: "var(--font-mono)", wordBreak: "break-all" }}>{h}</span>
+                  <button className="btn btn-ghost" style={{ flex: "none", padding: "2px 8px" }} onClick={() => removeFederation(h)} disabled={loading} aria-label="remove">✕</button>
+                </div>
+              ))}
+            </div>
+          )}
           {universeRoots.map((r) => (
             <div key={r.asset_id} style={{ ...inner, marginBottom: 8 }}>
               <div style={{ fontWeight: 600 }}>{r.asset_name || t("taproot.noName")}</div>

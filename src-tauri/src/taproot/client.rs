@@ -961,6 +961,45 @@ impl TaprootClient {
         Ok(resp.synced_universes.len())
     }
 
+    /// List the universe federation servers this node auto-syncs with.
+    pub async fn list_federation_servers(&mut self) -> Result<Vec<String>, String> {
+        let resp = self
+            .universe
+            .list_federation_servers(universerpc::ListFederationServersRequest {})
+            .await
+            .map_err(|e| format!("list federation: {e}"))?
+            .into_inner();
+        Ok(resp.servers.into_iter().map(|s| s.host).collect())
+    }
+
+    /// Add a universe server to the federation (node then periodically syncs it).
+    pub async fn add_federation_server(&mut self, host: &str) -> Result<(), String> {
+        self.universe
+            .add_federation_server(universerpc::AddFederationServerRequest {
+                servers: vec![universerpc::UniverseFederationServer {
+                    host: host.to_string(),
+                    id: 0,
+                }],
+            })
+            .await
+            .map_err(|e| format!("add federation: {e}"))?;
+        Ok(())
+    }
+
+    /// Remove a universe server from the federation.
+    pub async fn delete_federation_server(&mut self, host: &str) -> Result<(), String> {
+        self.universe
+            .delete_federation_server(universerpc::DeleteFederationServerRequest {
+                servers: vec![universerpc::UniverseFederationServer {
+                    host: host.to_string(),
+                    id: 0,
+                }],
+            })
+            .await
+            .map_err(|e| format!("delete federation: {e}"))?;
+        Ok(())
+    }
+
     // ---- Lightning assets (litd: tapchannel + rfq) ----
 
     pub async fn decode_asset_invoice(
