@@ -1186,6 +1186,17 @@ pub async fn get_ark_history_command(
 }
 
 #[command]
+pub async fn list_ark_vtxos_command(
+    state: State<'_, WalletState>,
+) -> Result<Vec<ark::service::VtxoSummary>, String> {
+    let service = {
+        let guard = state.ark.lock().map_err(|e| e.to_string())?;
+        guard.as_ref().cloned().ok_or("Wallet not unlocked")?
+    };
+    service.list_vtxos().await
+}
+
+#[command]
 pub async fn start_tor(state: State<'_, WalletState>) -> Result<String, String> {
     let tor = state.tor.lock().await.clone();
     tor.start().await?;

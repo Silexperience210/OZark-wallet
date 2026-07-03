@@ -49,6 +49,12 @@ interface ExitStatus {
   exits: ExitSummary[];
 }
 
+interface VtxoInfo {
+  vtxo_id: string;
+  amount_sats: number;
+  expiry_height: number;
+}
+
 export function Ark({ onBack }: ArkProps) {
   const { t } = useI18n();
   const { notify } = useNotification();
@@ -83,6 +89,8 @@ export function Ark({ onBack }: ArkProps) {
 
   // Exit
   const [exitStatus, setExitStatus] = useState<ExitStatus | null>(null);
+  const [vtxos, setVtxos] = useState<VtxoInfo[]>([]);
+  const [tipHeight, setTipHeight] = useState<number | null>(null);
   const [drainAddress, setDrainAddress] = useState("");
   const [exitResult, setExitResult] = useState("");
 
@@ -99,6 +107,7 @@ export function Ark({ onBack }: ArkProps) {
     fetchAddress();
     fetchBalance();
     loadConfig();
+    fetchVtxos();
 
     // Auto-sync ARK balance every 30 seconds while this screen is open.
     syncArk();
@@ -302,6 +311,24 @@ export function Ark({ onBack }: ArkProps) {
     }
   }
 
+  async function fetchVtxos() {
+    try {
+      setVtxos(await invoke<VtxoInfo[]>("list_ark_vtxos_command"));
+    } catch (e) {
+      console.error("list vtxos error:", e);
+    }
+    // Current chain tip so we can turn absolute expiry heights into "in ~N days".
+    try {
+      const res = await fetch("https://mempool.space/api/blocks/tip/height");
+      if (res.ok) {
+        const h = parseInt(await res.text(), 10);
+        if (!Number.isNaN(h)) setTipHeight(h);
+      }
+    } catch {
+      // offline — no blocks-left estimate, still show expiry heights
+    }
+  }
+
   async function fetchExitStatus() {
     setLoading(true);
     setError("");
@@ -481,6 +508,43 @@ export function Ark({ onBack }: ArkProps) {
           </button>
         </div>
       </motion.div>
+
+      {vtxos.length > 0 &&
+        (() => {
+          const soonest = vtxos.reduce((m, v) => Math.min(m, v.expiry_height), Infinity);
+          const totalSats = vtxos.reduce((s, v) => s + v.amount_sats, 0);
+          const blocksLeft = tipHeight != null ? soonest - tipHeight : null;
+          const daysLeft = blocksLeft != null ? Math.floor(blocksLeft / 144) : null;
+          const warn = blocksLeft != null && blocksLeft < 1008; // ~1 week of blocks
+          return (
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              transition={{ delay: 0.05 }}
+              className="glass-card"
+              style={{ padding: "20px", marginBottom: "20px", borderColor: warn ? "rgba(245,158,11,0.5)" : undefined }}
+            >
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+                <span className="text-secondary">
+                  <Shield size={16} style={{ verticalAlign: "middle", marginRight: 8 }} />
+                  VTXOs · expiration
+                </span>
+                <button className="btn btn-ghost" style={{ fontSize: 13 }} disabled={loading} onClick={async () => { await refreshVtxos(); await fetchVtxos(); }}>
+                  <RefreshCw size={14} /> Refresh
+                </button>
+              </div>
+              <div className="text-muted" style={{ fontSize: 13 }}>
+                {vtxos.length} VTXO{vtxos.length > 1 ? "s" : ""} · {totalSats.toLocaleString()} sats · prochaine expiration : bloc {soonest.toLocaleString()}
+                {blocksLeft != null && ` (~${daysLeft} j · ${blocksLeft.toLocaleString()} blocs)`}
+              </div>
+              {warn && (
+                <div style={{ marginTop: 10, padding: "10px 12px", borderRadius: 8, background: "rgba(245,158,11,0.12)", border: "1px solid rgba(245,158,11,0.4)", fontSize: 13 }}>
+                  ⚠️ Un VTXO expire bientôt — fais un <b>Refresh</b> pour éviter une sortie on-chain (exit unilatéral).
+                </div>
+              )}
+            </motion.div>
+          );
+        })()}
 
       <motion.div
         initial={{ opacity: 0 }}

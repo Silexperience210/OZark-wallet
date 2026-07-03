@@ -51,6 +51,9 @@ enum Request {
     History {
         respond: oneshot::Sender<Result<Vec<ArkMovementSummary>, String>>,
     },
+    ListVtxos {
+        respond: oneshot::Sender<Result<Vec<VtxoSummary>, String>>,
+    },
     RefreshVtxos {
         respond: oneshot::Sender<Result<String, String>>,
     },
@@ -86,6 +89,16 @@ pub struct ExitVtxoSummary {
     pub state: String,
     pub claimable: bool,
     pub pending: bool,
+}
+
+/// Serializable summary of a single spendable VTXO with its expiry height, so the
+/// UI can warn before a VTXO expires (Ark VTXOs must be refreshed before expiry,
+/// otherwise the funds require a unilateral on-chain exit).
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct VtxoSummary {
+    pub vtxo_id: String,
+    pub amount_sats: u64,
+    pub expiry_height: u32,
 }
 
 /// Serializable summary of a single Ark movement.
@@ -441,6 +454,26 @@ impl ArkService {
                             .await;
                             let _ = respond.send(res);
                         }
+                        Request::ListVtxos { respond } => {
+                            let res = async {
+                                let wallet = wallet.lock().await;
+                                let vtxos = wallet
+                                    .spendable_vtxos()
+                                    .await
+                                    .map_err(|e| e.to_string())?;
+                                let summaries = vtxos
+                                    .iter()
+                                    .map(|v| VtxoSummary {
+                                        vtxo_id: v.id().to_string(),
+                                        amount_sats: v.amount().to_sat(),
+                                        expiry_height: v.expiry_height(),
+                                    })
+                                    .collect::<Vec<_>>();
+                                Ok::<_, String>(summaries)
+                            }
+                            .await;
+                            let _ = respond.send(res);
+                        }
                         Request::OffboardAll { address, respond } => {
                             let res = async {
                                 let wallet = wallet.lock().await;
@@ -705,6 +738,14 @@ impl ArkService {
         let (respond, rx) = oneshot::channel();
         self.tx
             .send(Request::History { respond })
+            .map_err(|_| "ark service stopped")?;
+        rx.await.map_err(|_| "ark service dropped response")?
+    }
+
+    pub async fn list_vtxos(&self) -> Result<Vec<VtxoSummary>, String> {
+        let (respond, rx) = oneshot::channel();
+        self.tx
+            .send(Request::ListVtxos { respond })
             .map_err(|_| "ark service stopped")?;
         rx.await.map_err(|_| "ark service dropped response")?
     }

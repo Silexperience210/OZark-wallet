@@ -156,6 +156,7 @@ pub fn run() {
             commands::drain_ark_exits_command,
             commands::get_onchain_history_command,
             commands::get_ark_history_command,
+            commands::list_ark_vtxos_command,
             commands::start_tor,
             commands::stop_tor,
             commands::get_tor_status,
