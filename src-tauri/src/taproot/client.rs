@@ -348,7 +348,7 @@ impl TaprootClient {
             } else {
                 domain.clone()
             };
-            let tls = build_tls_client_config(&config.cert_pem)?;
+            let tls = build_tls_client_config(&config.cert_pem, is_onion)?;
             let tor_uri = normalized.replacen("https://", "http://", 1);
             let endpoint =
                 Endpoint::from_shared(tor_uri).map_err(|e| format!("invalid tapd host: {e}"))?;
@@ -1177,7 +1177,10 @@ fn err_chain(e: &(dyn std::error::Error + 'static)) -> String {
 /// connecting to a fixed .onion with a known cert, so pinning is the right model.
 #[derive(Debug)]
 struct PinnedCertVerifier {
-    pinned: Vec<u8>,
+    /// `Some(der)` pins the exact certificate; `None` accepts any certificate —
+    /// used for .onion, where the v3 onion address already authenticates the
+    /// endpoint (Tor rendezvous) so pinning is redundant and fragile.
+    pinned: Option<Vec<u8>>,
     provider: Arc<rustls::crypto::CryptoProvider>,
 }
 
@@ -1190,12 +1193,15 @@ impl rustls::client::danger::ServerCertVerifier for PinnedCertVerifier {
         _ocsp_response: &[u8],
         _now: rustls::pki_types::UnixTime,
     ) -> Result<rustls::client::danger::ServerCertVerified, rustls::Error> {
-        if end_entity.as_ref() == self.pinned.as_slice() {
-            Ok(rustls::client::danger::ServerCertVerified::assertion())
-        } else {
-            Err(rustls::Error::General(
+        match &self.pinned {
+            // Onion: Tor already authenticates the endpoint; accept any cert.
+            None => Ok(rustls::client::danger::ServerCertVerified::assertion()),
+            Some(p) if end_entity.as_ref() == p.as_slice() => {
+                Ok(rustls::client::danger::ServerCertVerified::assertion())
+            }
+            Some(_) => Err(rustls::Error::General(
                 "tapd server certificate does not match the pinned certificate".into(),
-            ))
+            )),
         }
     }
 
@@ -1251,11 +1257,20 @@ fn parse_cert_der(pem: &str) -> Result<Vec<u8>, String> {
 
 /// Build a rustls client config that pins the given tapd certificate and offers
 /// ALPN h2 (gRPC). Uses the ring provider to match arti-client.
-fn build_tls_client_config(cert_pem: &str) -> Result<rustls::ClientConfig, String> {
-    let der = parse_cert_der(cert_pem)?;
+fn build_tls_client_config(cert_pem: &str, is_onion: bool) -> Result<rustls::ClientConfig, String> {
     let provider = Arc::new(rustls::crypto::ring::default_provider());
+    // For .onion the v3 onion address itself authenticates the endpoint (Tor
+    // rendezvous), so pinning the self-signed cert is redundant AND fragile — it
+    // would break every user the moment litd regenerates its cert (update/expiry).
+    // Accept any cert over Tor (still TLS-encrypted) and rely on Tor for
+    // authentication; pin on clearnet where there is no such guarantee.
+    let pinned = if is_onion {
+        None
+    } else {
+        Some(parse_cert_der(cert_pem)?)
+    };
     let verifier = Arc::new(PinnedCertVerifier {
-        pinned: der,
+        pinned,
         provider: provider.clone(),
     });
     let mut config = rustls::ClientConfig::builder_with_provider(provider)
