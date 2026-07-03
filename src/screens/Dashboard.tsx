@@ -54,6 +54,7 @@ export function Dashboard({ onLogout, onBackup, onTaproot, onLightning, onArk, o
   const [sendTxid, setSendTxid] = useState("");
   const [network, setNetwork] = useState("signet");
   const [passwordPromptOpen, setPasswordPromptOpen] = useState(false);
+  const [fiatRate, setFiatRate] = useState<{ EUR: number; USD: number } | null>(null);
 
   useEffect(() => {
     fetchAddress();
@@ -62,6 +63,24 @@ export function Dashboard({ onLogout, onBackup, onTaproot, onLightning, onArk, o
     fetchOnchainBalance();
     fetchTaprootBalances();
     loadNetwork();
+  }, []);
+
+  // Fetch a BTC fiat rate (mempool.space, no key) for an at-a-glance value of the
+  // total balance. CSP already allows connect-src https:. Best-effort: on failure
+  // (offline/mainnet-only) no fiat line is shown.
+  useEffect(() => {
+    let cancelled = false;
+    fetch("https://mempool.space/api/v1/prices")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        if (!cancelled && d && typeof d.EUR === "number") {
+          setFiatRate({ EUR: d.EUR, USD: d.USD });
+        }
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   async function fetchTaprootBalances() {
@@ -290,6 +309,11 @@ export function Dashboard({ onLogout, onBackup, onTaproot, onLightning, onArk, o
         <div className="text-secondary">
           {total.toLocaleString()} sats · on-chain {balance.toLocaleString()} + Ark {arkBalance.toLocaleString()}
         </div>
+        {fiatRate && (
+          <div className="text-muted" style={{ fontSize: 13, marginTop: 4 }}>
+            ≈ {((total / 100_000_000) * fiatRate.EUR).toLocaleString(undefined, { style: "currency", currency: "EUR", maximumFractionDigits: 2 })}
+          </div>
+        )}
       </motion.div>
 
       <motion.div
