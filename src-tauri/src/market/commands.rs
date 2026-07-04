@@ -489,3 +489,32 @@ pub async fn market_pay_and_prove(
     super::nostr_client::send_dm(&keys, &desk_pubkey, &json).await?;
     Ok(preimage)
 }
+
+/// Seller side: sell a custodial balance back to a remote desk. Creates an
+/// amountless payout invoice on our node (the desk fills in the payout) and
+/// sends a Sell request; the sats arrive when the desk pays the invoice.
+#[command]
+pub async fn market_remote_sell(
+    state: State<'_, WalletState>,
+    desk_pubkey: String,
+    asset_id: String,
+    amount: u64,
+) -> Result<(), String> {
+    let ark = {
+        let guard = state.ark.lock().map_err(|e| e.to_string())?;
+        guard.clone()
+    };
+    let ark = ark.ok_or("lightning not ready")?;
+    let payout_invoice = ark
+        .create_bolt11_invoice(0, Some(format!("OZark sell {asset_id}")))
+        .await?;
+
+    let keys = nostr_keys(&state)?;
+    let req = settle::DeskRequest::Sell {
+        asset_id,
+        amount,
+        payout_invoice,
+    };
+    let json = serde_json::to_string(&req).map_err(|e| e.to_string())?;
+    super::nostr_client::send_dm(&keys, &desk_pubkey, &json).await
+}
