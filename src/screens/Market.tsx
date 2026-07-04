@@ -66,6 +66,15 @@ interface SellPreview {
   avg_price_msat: number;
 }
 
+// A real Taproot asset minted on the connected tapd node (from list_taproot_assets).
+interface TapdAsset {
+  asset_id: string;
+  name: string;
+  amount: number;
+  asset_type: string;
+  decimal_display: number;
+}
+
 // The local wallet's custodial account id on its own desk. When remote trading
 // lands (Nostr), this becomes the buyer's pubkey.
 const ME = "me";
@@ -141,6 +150,7 @@ export function Market({ onBack }: MarketProps) {
   const [sellAmount, setSellAmount] = useState("");
   const [sellPreview, setSellPreview] = useState<SellPreview | null>(null);
   const [busy, setBusy] = useState(false);
+  const [tapdAssets, setTapdAssets] = useState<TapdAsset[]>([]);
 
   // create form
   const [form, setForm] = useState({
@@ -159,6 +169,20 @@ export function Market({ onBack }: MarketProps) {
   useEffect(() => {
     loadMarkets();
   }, []);
+
+  // When opening the create form, pull the node's real minted Taproot assets so
+  // the user can launch a market for one (minting itself stays in the Assets
+  // screen — it's an async on-chain batch). Silent on failure (tapd offline).
+  useEffect(() => {
+    if (view !== "create") return;
+    let cancelled = false;
+    invoke<TapdAsset[]>("list_taproot_assets")
+      .then((a) => !cancelled && setTapdAssets(a))
+      .catch(() => !cancelled && setTapdAssets([]));
+    return () => {
+      cancelled = true;
+    };
+  }, [view]);
 
   async function loadMarkets() {
     setLoading(true);
@@ -499,6 +523,37 @@ export function Market({ onBack }: MarketProps) {
             <Plus size={16} style={{ marginRight: 8, verticalAlign: "middle" }} />
             Créer un token
           </div>
+
+          {tapdAssets.length > 0 ? (
+            <div style={{ marginBottom: 14 }}>
+              <label className="text-muted" style={{ fontSize: 12 }}>Depuis un asset tapd minté</label>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 6 }}>
+                {tapdAssets.map((a) => (
+                  <button
+                    key={a.asset_id}
+                    className={form.token_id === a.asset_id ? "btn btn-primary" : "btn btn-ghost"}
+                    style={{ fontSize: 12 }}
+                    title={a.asset_id}
+                    onClick={() =>
+                      setForm((f) => ({
+                        ...f,
+                        token_id: a.asset_id,
+                        name: f.name || a.name,
+                        ticker: f.ticker || a.name.slice(0, 6).toUpperCase(),
+                        supplyCap: String(a.amount),
+                      }))
+                    }
+                  >
+                    {a.name} · {a.amount.toLocaleString()}
+                  </button>
+                ))}
+              </div>
+            </div>
+          ) : (
+            <div className="text-muted" style={{ fontSize: 11, marginBottom: 12 }}>
+              Aucun asset tapd détecté (nœud non connecté ou aucun mint). Minte d'abord dans l'onglet « Assets », puis reviens lancer son marché — ou saisis un identifiant pour tester.
+            </div>
+          )}
 
           <label className="text-muted" style={{ fontSize: 12 }}>Ticker</label>
           <input className="input" placeholder="OZ" value={form.ticker} onChange={(e) => setForm({ ...form, ticker: e.target.value })} style={{ margin: "4px 0 12px" }} />
