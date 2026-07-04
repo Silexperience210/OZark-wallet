@@ -27,6 +27,73 @@ fn now_secs() -> u64 {
         .unwrap_or(0)
 }
 
+/// Build a token announcement (with a live snapshot) from a market.
+fn announcement_of(m: &Market) -> super::nostr_client::TokenAnnouncement {
+    super::nostr_client::TokenAnnouncement {
+        asset_id: m.token_id.clone(),
+        ticker: m.ticker.clone(),
+        name: m.name.clone(),
+        p0_num: m.params.p0_num,
+        k_num: m.params.k_num,
+        denom: m.params.denom,
+        supply_cap: m.params.supply_cap,
+        migration_sats: m.params.migration_sats,
+        creator_fee_bp: m.creator_fee_bp,
+        supply: m.supply,
+        reserve_sats: m.reserve_sats,
+        spot_price_msat: m.spot_price_msat().unwrap_or(0),
+        status: match m.status {
+            MarketStatus::Trading => "trading",
+            MarketStatus::Paused => "paused",
+            MarketStatus::Migrated => "migrated",
+        }
+        .to_string(),
+    }
+}
+
+/// Build a public tape entry from an executed trade.
+fn tape_entry(asset_id: &str, trader: &str, t: &Trade) -> super::nostr_client::TradeTapeEntry {
+    super::nostr_client::TradeTapeEntry {
+        asset_id: asset_id.to_string(),
+        side: match t.side {
+            Side::Buy => "buy",
+            Side::Sell => "sell",
+        }
+        .to_string(),
+        trader_pubkey: trader.to_string(),
+        tokens: t.tokens,
+        sats: t.sats,
+        price_msat: t.price_msat,
+        supply_after: t.supply_after,
+        ts: t.ts,
+    }
+}
+
+/// Fire-and-forget: publish the executed trade to the public tape and refresh
+/// the token's announcement snapshot on the relays. No-op if the wallet is
+/// locked; failures are logged, never surfaced to the trade result.
+fn spawn_tape_publish(
+    state: &State<'_, WalletState>,
+    entry: super::nostr_client::TradeTapeEntry,
+    ann: super::nostr_client::TokenAnnouncement,
+) {
+    let keys = match state.nostr.lock() {
+        Ok(g) => g.as_ref().cloned(),
+        Err(_) => None,
+    };
+    let Some(keys) = keys else {
+        return;
+    };
+    tauri::async_runtime::spawn(async move {
+        if let Err(e) = super::nostr_client::publish_trade(&keys, &entry).await {
+            log::warn!("publish trade to tape failed: {e}");
+        }
+        if let Err(e) = super::nostr_client::publish_announcement(&keys, &ann).await {
+            log::warn!("refresh announcement failed: {e}");
+        }
+    });
+}
+
 /// Lightweight projection of a market for list/detail views — omits the full
 /// ledger and trade log the panel doesn't need.
 #[derive(Serialize)]
@@ -173,11 +240,16 @@ pub fn market_buy(
     budget_sats: u64,
 ) -> Result<Trade, String> {
     let dir = WalletState::data_dir(&app_handle)?;
-    let mut desk = state.desk.lock().map_err(|e| e.to_string())?;
-    let trade = desk
-        .buy(&token_id, &user, budget_sats, now_secs())
-        .map_err(|e| e.to_string())?;
-    store::save(&dir, &desk)?;
+    let (trade, ann) = {
+        let mut desk = state.desk.lock().map_err(|e| e.to_string())?;
+        let trade = desk
+            .buy(&token_id, &user, budget_sats, now_secs())
+            .map_err(|e| e.to_string())?;
+        store::save(&dir, &desk)?;
+        let ann = announcement_of(desk.market(&token_id).map_err(|e| e.to_string())?);
+        (trade, ann)
+    };
+    spawn_tape_publish(&state, tape_entry(&token_id, &user, &trade), ann);
     Ok(trade)
 }
 
@@ -191,11 +263,16 @@ pub fn market_sell(
     amount: u64,
 ) -> Result<Trade, String> {
     let dir = WalletState::data_dir(&app_handle)?;
-    let mut desk = state.desk.lock().map_err(|e| e.to_string())?;
-    let trade = desk
-        .sell(&token_id, &user, amount, now_secs())
-        .map_err(|e| e.to_string())?;
-    store::save(&dir, &desk)?;
+    let (trade, ann) = {
+        let mut desk = state.desk.lock().map_err(|e| e.to_string())?;
+        let trade = desk
+            .sell(&token_id, &user, amount, now_secs())
+            .map_err(|e| e.to_string())?;
+        store::save(&dir, &desk)?;
+        let ann = announcement_of(desk.market(&token_id).map_err(|e| e.to_string())?);
+        (trade, ann)
+    };
+    spawn_tape_publish(&state, tape_entry(&token_id, &user, &trade), ann);
     Ok(trade)
 }
 
@@ -309,27 +386,7 @@ pub async fn market_publish(
     // Build the announcement under the std lock, then drop it before the await.
     let ann = {
         let desk = state.desk.lock().map_err(|e| e.to_string())?;
-        let m = desk.market(&token_id).map_err(|e| e.to_string())?;
-        super::nostr_client::TokenAnnouncement {
-            asset_id: m.token_id.clone(),
-            ticker: m.ticker.clone(),
-            name: m.name.clone(),
-            p0_num: m.params.p0_num,
-            k_num: m.params.k_num,
-            denom: m.params.denom,
-            supply_cap: m.params.supply_cap,
-            migration_sats: m.params.migration_sats,
-            creator_fee_bp: m.creator_fee_bp,
-            supply: m.supply,
-            reserve_sats: m.reserve_sats,
-            spot_price_msat: m.spot_price_msat().unwrap_or(0),
-            status: match m.status {
-                MarketStatus::Trading => "trading",
-                MarketStatus::Paused => "paused",
-                MarketStatus::Migrated => "migrated",
-            }
-            .to_string(),
-        }
+        announcement_of(desk.market(&token_id).map_err(|e| e.to_string())?)
     };
     let keys = nostr_keys(&state)?;
     super::nostr_client::publish_announcement(&keys, &ann).await
@@ -342,4 +399,29 @@ pub async fn market_discover(
 ) -> Result<Vec<super::nostr_client::DiscoveredToken>, String> {
     let keys = nostr_keys(&state)?;
     super::nostr_client::fetch_catalog(&keys).await
+}
+
+/// Fetch a token's public trade tape from Nostr, mapped to chart price points.
+/// Works for any token (local or remote) by asset id.
+#[command]
+pub async fn market_remote_history(
+    state: State<'_, WalletState>,
+    asset_id: String,
+) -> Result<Vec<PricePoint>, String> {
+    let keys = nostr_keys(&state)?;
+    let trades = super::nostr_client::fetch_trades(&keys, &asset_id).await?;
+    Ok(trades
+        .into_iter()
+        .map(|t| PricePoint {
+            ts: t.ts,
+            price_msat: t.price_msat,
+            side: if t.side == "sell" {
+                Side::Sell
+            } else {
+                Side::Buy
+            },
+            tokens: t.tokens,
+            supply_after: t.supply_after,
+        })
+        .collect())
 }

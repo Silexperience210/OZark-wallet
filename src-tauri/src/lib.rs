@@ -190,6 +190,7 @@ pub fn run() {
             market::commands::get_nostr_identity,
             market::commands::market_publish,
             market::commands::market_discover,
+            market::commands::market_remote_history,
         ]);
 
     #[cfg(mobile)]

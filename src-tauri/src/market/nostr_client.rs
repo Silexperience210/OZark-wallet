@@ -72,18 +72,23 @@ pub fn parse_token_event(event: &Event) -> Option<TokenAnnouncement> {
     serde_json::from_str(&event.content).ok()
 }
 
-/// Connect to the default relays, publish (replace) the token announcement, and
-/// disconnect. Returns the event id hex.
-pub async fn publish_announcement(keys: &Keys, ann: &TokenAnnouncement) -> Result<String, String> {
-    let event = build_token_event(keys, ann)?;
+/// Connect to the default relays, send one event, disconnect. Returns id hex.
+async fn publish_event(keys: &Keys, event: Event) -> Result<String, String> {
     let client = Client::new(keys.clone());
     for relay in DEFAULT_RELAYS {
         client.add_relay(relay).await.map_err(|e| e.to_string())?;
     }
     client.connect().await;
+    let id = event.id.to_hex();
     client.send_event(&event).await.map_err(|e| e.to_string())?;
     client.disconnect().await;
-    Ok(event.id.to_hex())
+    Ok(id)
+}
+
+/// Publish (replace) the token announcement on the default relays.
+pub async fn publish_announcement(keys: &Keys, ann: &TokenAnnouncement) -> Result<String, String> {
+    let event = build_token_event(keys, ann)?;
+    publish_event(keys, event).await
 }
 
 /// Query the default relays for all token announcements (the public catalogue).
@@ -109,6 +114,69 @@ pub async fn fetch_catalog(keys: &Keys) -> Result<Vec<DiscoveredToken>, String> 
         })
         .collect();
     Ok(out)
+}
+
+/// Regular (relay-stored) event kind for one executed trade on the public tape.
+pub const TRADE_KIND: u16 = 7337;
+
+/// One executed trade, published to the public **nominative** tape so anyone can
+/// rebuild a token's chart and see who traded.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TradeTapeEntry {
+    pub asset_id: String,
+    pub side: String,
+    pub trader_pubkey: String,
+    pub tokens: u64,
+    pub sats: u64,
+    pub price_msat: u64,
+    pub supply_after: u64,
+    pub ts: u64,
+}
+
+/// Build a signed trade-tape event, tagged with the asset id (`t`) for filtering.
+pub fn build_trade_event(keys: &Keys, entry: &TradeTapeEntry) -> Result<Event, String> {
+    let content = serde_json::to_string(entry).map_err(|e| e.to_string())?;
+    EventBuilder::new(Kind::Custom(TRADE_KIND), content)
+        .tags([Tag::hashtag(entry.asset_id.clone())])
+        .sign_with_keys(keys)
+        .map_err(|e| e.to_string())
+}
+
+/// Parse a trade-tape entry from an event.
+pub fn parse_trade_event(event: &Event) -> Option<TradeTapeEntry> {
+    if event.kind != Kind::Custom(TRADE_KIND) {
+        return None;
+    }
+    serde_json::from_str(&event.content).ok()
+}
+
+/// Publish one executed trade to the public tape.
+pub async fn publish_trade(keys: &Keys, entry: &TradeTapeEntry) -> Result<String, String> {
+    let event = build_trade_event(keys, entry)?;
+    publish_event(keys, event).await
+}
+
+/// Fetch a token's trade tape from the relays, oldest first (for the chart).
+pub async fn fetch_trades(keys: &Keys, asset_id: &str) -> Result<Vec<TradeTapeEntry>, String> {
+    let client = Client::new(keys.clone());
+    for relay in DEFAULT_RELAYS {
+        client.add_relay(relay).await.map_err(|e| e.to_string())?;
+    }
+    client.connect().await;
+    let filter = Filter::new()
+        .kind(Kind::Custom(TRADE_KIND))
+        .hashtag(asset_id);
+    let events = client
+        .fetch_events(filter, Duration::from_secs(8))
+        .await
+        .map_err(|e| e.to_string())?;
+    client.disconnect().await;
+    let mut trades: Vec<TradeTapeEntry> = events
+        .into_iter()
+        .filter_map(|e| parse_trade_event(&e))
+        .collect();
+    trades.sort_by_key(|t| t.ts);
+    Ok(trades)
 }
 
 #[cfg(test)]
@@ -151,5 +219,25 @@ mod tests {
             .sign_with_keys(&keys)
             .unwrap();
         assert!(parse_token_event(&e).is_none());
+    }
+
+    #[test]
+    fn trade_round_trips_through_event() {
+        let keys = Keys::generate();
+        let entry = TradeTapeEntry {
+            asset_id: "aa".into(),
+            side: "buy".into(),
+            trader_pubkey: keys.public_key().to_hex(),
+            tokens: 42,
+            sats: 100,
+            price_msat: 2_400,
+            supply_after: 42,
+            ts: 1_700_000_000,
+        };
+        let event = build_trade_event(&keys, &entry).unwrap();
+        assert_eq!(event.kind, Kind::Custom(TRADE_KIND));
+        assert_eq!(parse_trade_event(&event).expect("parse"), entry);
+        // an announcement event must not be read as a trade
+        assert!(parse_trade_event(&build_token_event(&keys, &sample()).unwrap()).is_none());
     }
 }
