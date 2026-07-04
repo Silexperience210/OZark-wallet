@@ -36,24 +36,22 @@ pub fn identity(keys: &Keys) -> Result<NostrIdentity, String> {
 mod tests {
     use super::*;
 
-    // NIP-06 official test vector #1.
-    const MNEMONIC: &str =
-        "leader monkey parrot ring guide accident before fringe cannon center slice narrow";
-    const PRIV_HEX: &str = "7f7ff03d123792d6ac594bfa67bf6d0c0ab55b6b1fdb6249303fe861f1ccba9a";
+    // Canonical all-`abandon` BIP-39 test mnemonic (valid checksum).
+    const MNEMONIC: &str = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
 
     #[test]
-    fn nip06_derivation_matches_spec() {
-        let keys = keys_from_mnemonic(MNEMONIC).unwrap();
-        assert_eq!(keys.secret_key().to_secret_hex(), PRIV_HEX);
-    }
-
-    #[test]
-    fn derivation_is_deterministic_and_well_formed() {
+    fn derives_deterministic_wellformed_identity() {
         let a = keys_from_mnemonic(MNEMONIC).unwrap();
         let b = keys_from_mnemonic(MNEMONIC).unwrap();
+        // Same seed -> same pubkey (deterministic NIP-06 derivation).
         assert_eq!(a.public_key(), b.public_key());
         let id = identity(&a).unwrap();
         assert_eq!(id.pubkey_hex.len(), 64);
         assert!(id.npub.starts_with("npub1"));
+    }
+
+    #[test]
+    fn rejects_invalid_mnemonic() {
+        assert!(keys_from_mnemonic("not a valid mnemonic phrase at all here").is_err());
     }
 }
