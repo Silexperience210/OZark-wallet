@@ -149,7 +149,9 @@ pub struct PricePoint {
     pub price_msat: u64,
     pub side: Side,
     pub tokens: u64,
+    pub sats: u64,
     pub supply_after: u64,
+    pub trader_pubkey: String,
 }
 
 /// Register (list) a new market for an already-minted asset. `spec.seed_sats`
@@ -201,7 +203,9 @@ pub fn market_price_history(
             price_msat: t.price_msat,
             side: t.side,
             tokens: t.tokens,
+            sats: t.sats,
             supply_after: t.supply_after,
+            trader_pubkey: t.user.clone(),
         })
         .collect())
 }
@@ -426,7 +430,9 @@ pub async fn market_remote_history(
                 Side::Buy
             },
             tokens: t.tokens,
+            sats: t.sats,
             supply_after: t.supply_after,
+            trader_pubkey: t.trader_pubkey.clone(),
         })
         .collect())
 }

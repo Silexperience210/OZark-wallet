@@ -49,7 +49,9 @@ interface PricePoint {
   price_msat: number;
   side: Side;
   tokens: number;
+  sats: number;
   supply_after: number;
+  trader_pubkey: string;
 }
 
 interface BuyPreview {
@@ -157,6 +159,121 @@ function PriceChart({ points }: { points: PricePoint[] }) {
     <svg viewBox={`0 0 ${W} ${H}`} width="100%" height="120" preserveAspectRatio="none" style={{ display: "block" }}>
       <polyline points={coords} fill="none" stroke={stroke} strokeWidth={2} strokeLinejoin="round" strokeLinecap="round" />
     </svg>
+  );
+}
+
+type Timeframe = "1h" | "24h" | "7j" | "tout";
+const TF_SECS: Record<Timeframe, number> = { "1h": 3600, "24h": 86400, "7j": 604800, tout: Infinity };
+
+function fmtCompact(n: number): string {
+  if (n >= 1_000_000) return (n / 1_000_000).toFixed(2) + "M";
+  if (n >= 1_000) return (n / 1_000).toFixed(1) + "k";
+  return String(Math.round(n));
+}
+
+/** Candlestick chart: buckets the tape into OHLC and draws wicks + bodies. */
+function Candles({ points }: { points: PricePoint[] }) {
+  if (points.length < 2) {
+    return (
+      <div className="text-muted" style={{ fontSize: 12, textAlign: "center", padding: "24px 0" }}>
+        Pas encore assez de trades
+      </div>
+    );
+  }
+  const W = 320;
+  const H = 150;
+  const pad = 8;
+  const n = Math.min(24, points.length);
+  const t0 = points[0].ts;
+  const span = Math.max(1, points[points.length - 1].ts - t0);
+  const buckets: PricePoint[][] = Array.from({ length: n }, () => []);
+  for (const p of points) {
+    const idx = Math.min(n - 1, Math.floor(((p.ts - t0) / span) * n));
+    buckets[idx].push(p);
+  }
+  let prevClose = points[0].price_msat;
+  const candles = buckets.map((ps) => {
+    if (ps.length === 0) return { o: prevClose, h: prevClose, l: prevClose, c: prevClose };
+    const prices = ps.map((p) => p.price_msat);
+    const o = prevClose;
+    const c = ps[ps.length - 1].price_msat;
+    const candle = { o, h: Math.max(o, ...prices), l: Math.min(o, ...prices), c };
+    prevClose = c;
+    return candle;
+  });
+  const lo = Math.min(...candles.map((c) => c.l));
+  const hi = Math.max(...candles.map((c) => c.h));
+  const range = hi - lo || 1;
+  const bw = (W - 2 * pad) / n;
+  const y = (v: number) => pad + (1 - (v - lo) / range) * (H - 2 * pad);
+  return (
+    <svg viewBox={`0 0 ${W} ${H}`} width="100%" height="150" preserveAspectRatio="none" style={{ display: "block" }}>
+      {candles.map((c, i) => {
+        const cx = pad + (i + 0.5) * bw;
+        const up = c.c >= c.o;
+        const color = up ? "#00f0ff" : "#ff4466";
+        const top = y(Math.max(c.o, c.c));
+        const bot = y(Math.min(c.o, c.c));
+        return (
+          <g key={i}>
+            <line x1={cx} x2={cx} y1={y(c.h)} y2={y(c.l)} stroke={color} strokeWidth={1} />
+            <rect x={cx - bw * 0.3} y={top} width={bw * 0.6} height={Math.max(1, bot - top)} fill={color} />
+          </g>
+        );
+      })}
+    </svg>
+  );
+}
+
+/** Trader panel: market cap, change, volume, holders + timeframe + chart. */
+function TraderPanel({
+  points,
+  supply,
+  spotPriceMsat,
+}: {
+  points: PricePoint[];
+  supply: number;
+  spotPriceMsat: number;
+}) {
+  const [tf, setTf] = useState<Timeframe>("24h");
+  const now = Date.now() / 1000;
+  const cutoff = TF_SECS[tf] === Infinity ? 0 : now - TF_SECS[tf];
+  const windowed = points.filter((p) => p.ts >= cutoff);
+  const marketcap = supply * (spotPriceMsat / 1000);
+  const volume = windowed.reduce((s, p) => s + p.sats, 0);
+  const baseline = windowed.length ? windowed[0].price_msat : points.length ? points[0].price_msat : spotPriceMsat;
+  const changePct = baseline > 0 ? ((spotPriceMsat - baseline) / baseline) * 100 : 0;
+  const holders = new Set(points.map((p) => p.trader_pubkey)).size;
+  const chartPoints = TF_SECS[tf] === Infinity || windowed.length < 2 ? points : windowed;
+  const changeColor = changePct >= 0 ? "#00f0ff" : "#ff4466";
+  const stat = (label: string, value: string, color?: string) => (
+    <div style={{ background: "rgba(255,255,255,0.03)", borderRadius: 10, padding: "8px 10px" }}>
+      <div className="text-muted" style={{ fontSize: 10 }}>{label}</div>
+      <div style={{ fontWeight: 600, fontSize: 13, color }}>{value}</div>
+    </div>
+  );
+  return (
+    <>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 8, marginBottom: 12 }}>
+        {stat("Market cap", `${fmtCompact(marketcap)} sat`)}
+        {stat(`Var. ${tf}`, `${changePct >= 0 ? "+" : ""}${changePct.toFixed(1)}%`, changeColor)}
+        {stat(`Vol. ${tf}`, `${fmtCompact(volume)} sat`)}
+        {stat("Détenteurs", String(holders))}
+      </div>
+      {chartPoints.length >= 5 ? <Candles points={chartPoints} /> : <PriceChart points={chartPoints} />}
+      <div style={{ display: "flex", gap: 6, marginTop: 10 }}>
+        {(["1h", "24h", "7j", "tout"] as Timeframe[]).map((t) => (
+          <button
+            key={t}
+            onClick={() => setTf(t)}
+            className={tf === t ? "btn btn-primary" : "btn btn-ghost"}
+            style={{ flex: 1, fontSize: 12, padding: "6px 0" }}
+          >
+            {t}
+          </button>
+        ))}
+      </div>
+    </>
   );
 }
 
@@ -685,7 +802,7 @@ export function Market({ onBack }: MarketProps) {
                 <RefreshCw size={14} /> Actualiser
               </button>
             </div>
-            <PriceChart points={history} />
+            <TraderPanel points={history} supply={detail.supply} spotPriceMsat={detail.spot_price_msat} />
           </motion.div>
 
           {/* buy */}
@@ -846,7 +963,7 @@ export function Market({ onBack }: MarketProps) {
 
           <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.05 }} className="glass-card" style={{ padding: 20, marginBottom: 20 }}>
             <div className="text-secondary" style={{ marginBottom: 8 }}>Prix · tape Nostr</div>
-            <PriceChart points={remoteHistory} />
+            <TraderPanel points={remoteHistory} supply={remoteDetail.ann.supply} spotPriceMsat={remoteDetail.ann.spot_price_msat} />
           </motion.div>
 
           <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.1 }} className="glass-card" style={{ padding: 20, marginBottom: 20 }}>
