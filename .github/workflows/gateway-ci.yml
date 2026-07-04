@@ -1,0 +1,60 @@
+name: Gateway CI
+
+# The gateway is a standalone binary (runs on the Umbrel node, not shipped in the
+# APK) with its own dependency tree, so it gets its own workflow. Triggers only on
+# changes under gateway/ (or manual dispatch) to avoid running on app-only PRs.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "gateway/**"
+      - ".github/workflows/gateway-ci.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "gateway/**"
+      - ".github/workflows/gateway-ci.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: gateway-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Install protoc
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y protobuf-compiler build-essential
+          echo "PROTOC=$(which protoc)" >> "$GITHUB_ENV"
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: gateway
+
+      - name: Check formatting
+        working-directory: ./gateway
+        run: cargo fmt -- --check
+
+      - name: Clippy
+        working-directory: ./gateway
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: Check
+        working-directory: ./gateway
+        run: cargo check --all-targets
+
+      - name: Test
+        working-directory: ./gateway
+        run: cargo test
