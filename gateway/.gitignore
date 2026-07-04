@@ -1,0 +1,8 @@
+/target
+# Runtime ownership DB (created next to the binary by default).
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+# Local tapd credential copies must never be committed.
+tls.cert
+*.macaroon

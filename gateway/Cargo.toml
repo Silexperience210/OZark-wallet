@@ -1,0 +1,54 @@
+[package]
+name = "ozark-gateway"
+version = "0.1.0"
+description = "OZark tapd gateway — NIP-98 authenticated, per-owner isolated access to a shared Taproot Assets node"
+authors = ["OZark"]
+edition = "2021"
+publish = false
+
+# Standalone binary that runs on the Umbrel node next to litd/tapd. It holds the
+# tapd macaroon LOCALLY (read from a file, never shipped in the APK) and exposes a
+# small HTTP API that the wallet reaches over the node's Tor onion service. Every
+# request is authenticated with a NIP-98 event and every asset action is scoped to
+# its owner via a SQLite ownership registry. NOT part of the Tauri app build.
+
+[[bin]]
+name = "ozark-gateway"
+path = "src/main.rs"
+
+[dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal", "time", "sync"] }
+axum = { version = "0.7", features = ["json", "query", "http1"] }
+
+# tapd gRPC. We do TLS ourselves in a custom connector (cert pinning) because the
+# litd/tapd cert is self-signed with CA:TRUE, which rustls' webpki rejects as a
+# leaf (CaUsedAsEndEntity) — same workaround the wallet app uses. So tonic only
+# needs its default transport (no `tls` feature; that would pull a second, possibly
+# conflicting, crypto provider).
+tonic = "0.12"
+prost = "0.13"
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12", "logging"] }
+hyper-util = { version = "0.1", features = ["tokio"] }
+http = "1"
+tower-service = "0.3"
+
+# Ownership registry.
+rusqlite = { version = "0.31", features = ["bundled"] }
+
+# NIP-98 auth: parse + verify signed Nostr events. Same crate/version as the app.
+nostr = "0.44.4"
+
+sha2 = "0.10"
+hex = "0.4"
+base64 = "0.22"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "1"
+url = "2"
+log = "0.4"
+env_logger = "0.11"
+zeroize = "1"
+
+[build-dependencies]
+tonic-build = "0.12"
