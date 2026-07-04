@@ -91,11 +91,6 @@ pub struct SellQuote {
     pub avg_price_msat: u64,
 }
 
-/// `ceil(a / b)` without the `a + b` overflow of the naive form. `b` must be > 0.
-fn ceil_div(a: u128, b: u128) -> u128 {
-    a / b + u128::from(a % b != 0)
-}
-
 /// Average price in millisats per token, saturating instead of wrapping.
 fn avg_price_msat(sats: u64, tokens: u64) -> u64 {
     if tokens == 0 {
@@ -176,7 +171,8 @@ impl CurveParams {
             return Err(CurveError::SupplyCapExceeded);
         }
         let (numer, den) = self.integral_frac(supply, s2)?;
-        u64::try_from(ceil_div(numer, den)).map_err(|_| CurveError::Overflow)
+        // den = 2*denom > 0 (validated in integral_frac), so div_ceil is safe.
+        u64::try_from(numer.div_ceil(den)).map_err(|_| CurveError::Overflow)
     }
 
     /// Sats refunded for selling `amount` tokens from `supply` (rounded down).
