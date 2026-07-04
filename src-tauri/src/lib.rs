@@ -195,6 +195,9 @@ pub fn run() {
             market::commands::market_publish,
             market::commands::market_discover,
             market::commands::market_remote_history,
+            market::commands::market_remote_buy,
+            market::commands::market_check_responses,
+            market::commands::market_pay_and_prove,
         ]);
 
     #[cfg(mobile)]
