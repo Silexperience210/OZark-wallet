@@ -17,9 +17,10 @@ import { TaprootAssets } from "./screens/TaprootAssets";
 import { Lightning } from "./screens/Lightning";
 import { Ark } from "./screens/Ark";
 import { History } from "./screens/History";
+import { Market } from "./screens/Market";
 import "./styles/theme.css";
 
-type Screen = "welcome" | "create" | "import" | "unlock" | "dashboard" | "backup" | "taproot" | "lightning" | "ark" | "history";
+type Screen = "welcome" | "create" | "import" | "unlock" | "dashboard" | "backup" | "taproot" | "lightning" | "ark" | "history" | "market";
 
 // Bech32 charset used by BOLT11 invoices (excludes 1, b, i, o).
 const BOLT11_RE = /^lnbc[0-9munp]*1[ac-hj-np-z02-9]{6,}$/i;
@@ -191,6 +192,7 @@ function AppContent() {
               onLightning={() => setScreen("lightning")}
               onArk={() => setScreen("ark")}
               onHistory={() => setScreen("history")}
+              onMarket={() => setScreen("market")}
               onLightningPay={(inv) => setPendingInvoice(inv)}
             />
           )}
@@ -211,6 +213,9 @@ function AppContent() {
           )}
           {screen === "ark" && (
             <Ark onBack={() => setScreen("dashboard")} />
+          )}
+          {screen === "market" && (
+            <Market onBack={() => setScreen("dashboard")} />
           )}
           {screen === "backup" && (
             <BackupWallet onBack={() => setScreen("dashboard")} />

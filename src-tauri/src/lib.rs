@@ -1,6 +1,10 @@
 mod ark;
 mod backup;
 mod commands;
+// `pub` so the not-yet-wired bonding-curve math counts as public API and does
+// not trip clippy's `dead_code` under `-D warnings`. Made private once the desk
+// commands consume it.
+pub mod market;
 mod onchain;
 mod tapd_defaults;
 mod taproot;
@@ -43,6 +47,9 @@ pub struct WalletState {
     pub ark: Arc<Mutex<Option<ArkService>>>,
     pub taproot: Arc<tokio::sync::Mutex<Option<TaprootClient>>>,
     pub tor: Arc<tokio::sync::Mutex<TorService>>,
+    /// Bonding-curve marketplace desk (reserves, ledger, trade log), loaded from
+    /// the on-disk snapshot at startup and saved through on every trade.
+    pub desk: Arc<Mutex<market::Desk>>,
     /// Observable status of the background unlock tasks.
     pub bg_init: Arc<Mutex<BackgroundInit>>,
     /// Handles to the spawned background tasks so they can be aborted on delete.
@@ -51,12 +58,14 @@ pub struct WalletState {
 
 impl WalletState {
     pub fn new(data_dir: PathBuf) -> Self {
+        let desk = market::store::load_or_default(&data_dir);
         Self {
             onchain: Arc::new(Mutex::new(None)),
             onchain_db_path: Arc::new(Mutex::new(None)),
             ark: Arc::new(Mutex::new(None)),
             taproot: Arc::new(tokio::sync::Mutex::new(None)),
             tor: Arc::new(tokio::sync::Mutex::new(TorService::new(data_dir))),
+            desk: Arc::new(Mutex::new(desk)),
             bg_init: Arc::new(Mutex::new(BackgroundInit::default())),
             bg_tasks: Arc::new(Mutex::new(Vec::new())),
         }
@@ -163,6 +172,17 @@ pub fn run() {
             commands::load_tor_config,
             commands::save_tor_config,
             commands::get_tapd_defaults,
+            market::commands::market_create,
+            market::commands::market_list,
+            market::commands::market_get,
+            market::commands::market_price_history,
+            market::commands::market_quote_buy,
+            market::commands::market_quote_sell,
+            market::commands::market_buy,
+            market::commands::market_sell,
+            market::commands::market_position,
+            market::commands::market_set_paused,
+            market::commands::market_withdraw_asset,
         ]);
 
     #[cfg(mobile)]
