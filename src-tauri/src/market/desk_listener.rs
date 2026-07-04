@@ -108,7 +108,87 @@ async fn handle(ctx: &ListenerCtx, wrap_id: &str, sender: &str, req: DeskRequest
             handle_payment_proof(ctx, &order_id, &preimage)
         }
         DeskRequest::OrderStatus { order_id } => handle_order_status(ctx, &order_id),
-        DeskRequest::Sell { .. } => err("remote sell is not available yet"),
+        DeskRequest::Sell {
+            asset_id,
+            amount,
+            payout_invoice,
+        } => handle_sell(ctx, sender, &asset_id, amount, &payout_invoice).await,
+    }
+}
+
+/// Remote sell: the seller (who holds a custodial balance on this desk) sends a
+/// payout invoice; the desk pays it, then debits the ledger. Payment happens
+/// **before** the debit, so a routing failure just leaves the seller's tokens
+/// untouched.
+async fn handle_sell(
+    ctx: &ListenerCtx,
+    seller: &str,
+    asset_id: &str,
+    amount: u64,
+    payout_invoice: &str,
+) -> DeskResponse {
+    // Quote the payout under the desk lock (also checks the seller's balance).
+    let payout = {
+        let desk = match ctx.desk.lock() {
+            Ok(d) => d,
+            Err(_) => return err("desk busy"),
+        };
+        let market = match desk.market(asset_id) {
+            Ok(m) => m,
+            Err(e) => return err(e.to_string()),
+        };
+        match market.preview_sell(seller, amount) {
+            Ok(p) => p.payout_sats,
+            Err(e) => return err(e.to_string()),
+        }
+    };
+    if payout == 0 {
+        return err("payout is zero");
+    }
+
+    // Pay the seller first.
+    let ark = match ctx.ark.lock().ok().and_then(|a| a.clone()) {
+        Some(a) => a,
+        None => return err("lightning not ready"),
+    };
+    if let Err(e) = ark
+        .pay_lightning_invoice(payout_invoice.to_string(), Some(payout))
+        .await
+    {
+        return err(format!("payout failed: {e}"));
+    }
+
+    // Now debit the ledger + reduce the reserve.
+    let (trade, ann) = {
+        let mut desk = match ctx.desk.lock() {
+            Ok(d) => d,
+            Err(_) => return err("desk busy after payout"),
+        };
+        let trade = match desk.sell(asset_id, seller, amount, now_secs()) {
+            Ok(t) => t,
+            Err(e) => return err(e.to_string()),
+        };
+        let _ = store::save(&ctx.data_dir, &desk);
+        let ann = match desk.market(asset_id) {
+            Ok(m) => announcement_of(m),
+            Err(e) => return err(e.to_string()),
+        };
+        (trade, ann)
+    };
+
+    let keys = ctx.keys.clone();
+    let entry = tape_entry(asset_id, seller, &trade);
+    tauri::async_runtime::spawn(async move {
+        let _ = nostr_client::publish_trade(&keys, &entry).await;
+        let _ = nostr_client::publish_announcement(&keys, &ann).await;
+    });
+
+    DeskResponse::Filled {
+        order_id: String::new(),
+        asset_id: asset_id.to_string(),
+        side: "sell".to_string(),
+        tokens: amount,
+        sats: payout,
     }
 }
 

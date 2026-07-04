@@ -170,6 +170,7 @@ export function Market({ onBack }: MarketProps) {
   const [remoteBuyBudget, setRemoteBuyBudget] = useState("");
   const [remoteInvoice, setRemoteInvoice] = useState<InvoiceResp | null>(null);
   const [remoteBusy, setRemoteBusy] = useState(false);
+  const [remoteSellAmount, setRemoteSellAmount] = useState("");
   const [loading, setLoading] = useState(false);
   const [discovering, setDiscovering] = useState(false);
 
@@ -344,6 +345,37 @@ export function Market({ onBack }: MarketProps) {
         notify(`Reçu ${f.tokens.toLocaleString()} ${remoteDetail.ann.ticker} ✅`, "success");
       } else {
         notify("Confirmation non reçue — le desk créditera à réception", "info");
+      }
+    } catch (e) {
+      notify(String(e), "error");
+    } finally {
+      setRemoteBusy(false);
+    }
+  }
+
+  // Seller flow: sell a custodial balance back to the remote desk (the desk pays
+  // an amountless invoice created on our node).
+  async function remoteSell() {
+    if (!remoteDetail) return;
+    const amt = Math.floor(Number(remoteSellAmount));
+    if (!(amt > 0)) {
+      notify("Quantité invalide", "error");
+      return;
+    }
+    setRemoteBusy(true);
+    try {
+      await invoke("market_remote_sell", {
+        deskPubkey: remoteDetail.desk_pubkey,
+        assetId: remoteDetail.ann.asset_id,
+        amount: amt,
+      });
+      notify("Demande de vente envoyée — paiement en cours…", "info");
+      setRemoteSellAmount("");
+      const f = await pollResponse("filled");
+      if (f && f.kind === "filled") {
+        notify(`Vendu → ${f.sats.toLocaleString()} sat reçus ✅`, "success");
+      } else {
+        notify("Confirmation non reçue — vérifie ton solde LN", "info");
       }
     } catch (e) {
       notify(String(e), "error");
@@ -850,6 +882,27 @@ export function Market({ onBack }: MarketProps) {
             <div className="text-muted" style={{ fontSize: 11, marginTop: 10, display: "flex", gap: 8, alignItems: "flex-start" }}>
               <Globe size={13} style={{ flexShrink: 0, marginTop: 2, color: "#a855f7" }} />
               <span>Custodial : le desk doit être en ligne. Tu paies une invoice LN, il crédite tes tokens (preuve par préimage).</span>
+            </div>
+          </motion.div>
+
+          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.12 }} className="glass-card" style={{ padding: 20, marginBottom: 20 }}>
+            <div className="text-secondary" style={{ marginBottom: 12 }}>
+              <TrendingDown size={16} style={{ marginRight: 8, verticalAlign: "middle", color: "#ff4466" }} />
+              Vendre · payé en Lightning
+            </div>
+            <input
+              className="input"
+              type="number"
+              placeholder={`Quantité (${remoteDetail.ann.ticker})`}
+              value={remoteSellAmount}
+              onChange={(e) => setRemoteSellAmount(e.target.value)}
+              style={{ marginBottom: 10 }}
+            />
+            <button className="btn btn-secondary" onClick={remoteSell} disabled={remoteBusy}>
+              {remoteBusy ? <span className="spinner" /> : <TrendingDown size={16} />} Vendre
+            </button>
+            <div className="text-muted" style={{ fontSize: 11, marginTop: 10 }}>
+              Nécessite un solde de ce token détenu sur ce desk (depuis un achat précédent). Le desk paie une invoice créée sur ton nœud.
             </div>
           </motion.div>
         </>
