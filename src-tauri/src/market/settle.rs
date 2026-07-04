@@ -9,6 +9,7 @@
 //! The DM transport, the LN invoice/payment plumbing and the desk listener build
 //! on top of these types.
 
+use bitcoin::hashes::{sha256, Hash};
 use serde::{Deserialize, Serialize};
 
 /// Payment window before an unpaid order is abandoned (seconds).
@@ -28,6 +29,9 @@ pub enum DeskRequest {
     },
     /// Poll the status of a previously created order.
     OrderStatus { order_id: String },
+    /// Prove payment of a buy order by revealing the LN preimage. The desk
+    /// credits the tokens once `sha256(preimage) == order.payment_hash`.
+    PaymentProof { order_id: String, preimage: String },
 }
 
 /// A message from a desk to a remote trader.
@@ -90,6 +94,16 @@ impl Order {
     pub fn is_expired(&self, now: u64) -> bool {
         self.status == OrderStatus::AwaitingPayment
             && now.saturating_sub(self.created_at) > ORDER_TTL_SECS
+    }
+
+    /// Verify a revealed LN preimage against this order's payment hash. The
+    /// preimage can only be known by whoever paid the invoice, so this is a
+    /// self-contained proof of payment — no need to poll the LN node.
+    pub fn verify_preimage(&self, preimage_hex: &str) -> bool {
+        let Ok(bytes) = hex::decode(preimage_hex) else {
+            return false;
+        };
+        sha256::Hash::hash(&bytes).to_string() == self.payment_hash.to_lowercase()
     }
 
     /// The invoice response a buyer should receive for this order.
@@ -198,5 +212,29 @@ mod tests {
             }
             _ => panic!("expected invoice response"),
         }
+    }
+
+    #[test]
+    fn preimage_proof_verifies() {
+        let mut o = Order {
+            order_id: "o1".into(),
+            buyer_pubkey: "pk".into(),
+            asset_id: "aa".into(),
+            budget_sats: 100,
+            tokens: 40,
+            cost_sats: 99,
+            fee_sats: 1,
+            invoice: "lnbc1...".into(),
+            // sha256(0x00)
+            payment_hash: "6e340b9cffb37a989ca544e6bb780a2c78901d3fb33738768511a30617afa01d".into(),
+            status: OrderStatus::AwaitingPayment,
+            created_at: 0,
+        };
+        assert!(o.verify_preimage("00"));
+        assert!(!o.verify_preimage("01")); // wrong preimage
+        assert!(!o.verify_preimage("zz")); // not hex
+                                           // stored hash comparison is case-insensitive
+        o.payment_hash = o.payment_hash.to_uppercase();
+        assert!(o.verify_preimage("00"));
     }
 }
