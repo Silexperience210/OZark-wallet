@@ -39,6 +39,7 @@ pub struct MarketView {
     pub status: MarketStatus,
     pub supply: u64,
     pub reserve_sats: u64,
+    pub withdrawn: u64,
     pub spot_price_msat: u64,
     pub progress_bp: u16,
     pub creator_fee_bp: u16,
@@ -58,6 +59,7 @@ impl MarketView {
             status: m.status,
             supply: m.supply,
             reserve_sats: m.reserve_sats,
+            withdrawn: m.withdrawn,
             spot_price_msat: m.spot_price_msat().unwrap_or(0),
             progress_bp: m.progress_bp(),
             creator_fee_bp: m.creator_fee_bp,
@@ -231,4 +233,51 @@ pub fn market_set_paused(
         };
     }
     store::save(&dir, &desk)
+}
+
+/// Withdraw `amount` tokens of a market's asset on-chain to `address` (a Taproot
+/// Asset address that already encodes the asset and amount). The asset moves via
+/// tapd `send_asset`; the custodial ledger is debited only **after** the send
+/// succeeds. The tokens stay in circulation (counted as `withdrawn`), so supply
+/// and reserve are untouched. Returns the anchor txid.
+#[command]
+pub async fn market_withdraw_asset(
+    app_handle: AppHandle,
+    state: State<'_, WalletState>,
+    token_id: String,
+    user: String,
+    amount: u64,
+    address: String,
+    fee_rate_sat_vb: u32,
+) -> Result<String, String> {
+    if amount == 0 {
+        return Err("amount must be > 0".to_string());
+    }
+    // Pre-check the custodial balance, then drop the (std) desk lock before any
+    // await — never hold a std Mutex across an await point.
+    {
+        let desk = state.desk.lock().map_err(|e| e.to_string())?;
+        let m = desk.market(&token_id).map_err(|e| e.to_string())?;
+        if m.balances.get(&user).copied().unwrap_or(0) < amount {
+            return Err("insufficient token balance".to_string());
+        }
+    }
+    // Move the asset on-chain via tapd.
+    let txid = {
+        let mut guard = state.taproot.lock().await;
+        let client = guard.as_mut().ok_or("tapd not connected")?;
+        client
+            .send_asset(&address, fee_rate_sat_vb)
+            .await
+            .map_err(|e| e.to_string())?
+    };
+    // Debit the ledger + record the withdrawn supply, then persist.
+    let dir = WalletState::data_dir(&app_handle)?;
+    {
+        let mut desk = state.desk.lock().map_err(|e| e.to_string())?;
+        desk.withdraw(&token_id, &user, amount)
+            .map_err(|e| e.to_string())?;
+        store::save(&dir, &desk)?;
+    }
+    Ok(txid)
 }

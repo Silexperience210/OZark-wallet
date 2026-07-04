@@ -151,6 +151,12 @@ pub struct Market {
     pub status: MarketStatus,
     pub supply: u64,
     pub reserve_sats: u64,
+    /// Tokens that left custody (withdrawn on-chain or over a Lightning asset
+    /// channel) but are still in circulation and still backed by the reserve.
+    /// Tracked so the conservation invariant holds once custody can be exited:
+    /// `sum(balances) + withdrawn == supply`.
+    #[serde(default)]
+    pub withdrawn: u64,
     pub creator_fee_bp: u16,
     pub creator_fees_sats: u64,
     pub created_at: u64,
@@ -278,6 +284,34 @@ impl Market {
         Ok(trade)
     }
 
+    /// Move `amount` tokens out of `user`'s custodial balance so they can be
+    /// withdrawn (on-chain via `send_asset`, or over a Lightning asset channel).
+    ///
+    /// The tokens stay **in circulation** and stay backed by the reserve — only
+    /// custody changes — so `supply` and `reserve_sats` are untouched and the
+    /// count shifts into `withdrawn`. This is transport-agnostic: the actual
+    /// asset move is performed by the caller (tapd); this only updates the
+    /// ledger, and should be called *after* the move succeeds.
+    pub fn withdraw(&mut self, user: &str, amount: u64) -> Result<(), DeskError> {
+        if amount == 0 {
+            return Err(DeskError::DustAmount);
+        }
+        let bal = self.balances.get(user).copied().unwrap_or(0);
+        if bal < amount {
+            return Err(DeskError::InsufficientBalance);
+        }
+        let entry = self
+            .balances
+            .get_mut(user)
+            .ok_or(DeskError::InsufficientBalance)?;
+        *entry -= amount;
+        if *entry == 0 {
+            self.balances.remove(user);
+        }
+        self.withdrawn = self.withdrawn.saturating_add(amount);
+        Ok(())
+    }
+
     fn maybe_migrate(&mut self) {
         if self.status == MarketStatus::Trading && self.params.is_migratable(self.supply) {
             self.status = MarketStatus::Migrated;
@@ -313,6 +347,7 @@ impl Desk {
             status: MarketStatus::Trading,
             supply: 0,
             reserve_sats: 0,
+            withdrawn: 0,
             creator_fee_bp: spec.creator_fee_bp,
             creator_fees_sats: 0,
             created_at: ts,
@@ -356,6 +391,14 @@ impl Desk {
             .sell(user, amount, ts)
     }
 
+    /// Move `amount` tokens of `token_id` out of `user`'s custodial balance.
+    pub fn withdraw(&mut self, token_id: &str, user: &str, amount: u64) -> Result<(), DeskError> {
+        self.markets
+            .get_mut(token_id)
+            .ok_or(DeskError::MarketNotFound)?
+            .withdraw(user, amount)
+    }
+
     /// Publicly listed markets only (the marketplace feed).
     pub fn public_markets(&self) -> Vec<&Market> {
         self.markets
@@ -391,7 +434,7 @@ mod tests {
     /// The two load-bearing invariants, checked after every op.
     fn check(m: &Market) {
         let held: u64 = m.balances.values().sum();
-        assert_eq!(held, m.supply, "ledger sum != circulating supply");
+        assert_eq!(held + m.withdrawn, m.supply, "ledger + withdrawn != supply");
         assert!(
             m.reserve_sats >= m.params.reserve_at(m.supply).unwrap(),
             "reserve insolvent: {} < {}",
@@ -550,5 +593,30 @@ mod tests {
         assert_eq!(d.buy("aa", "bob", 1_000, 2), Err(DeskError::NotTrading));
         let bal = *d.market("aa").unwrap().balances.get("bob").unwrap();
         assert_eq!(d.sell("aa", "bob", bal, 3), Err(DeskError::NotTrading));
+    }
+
+    #[test]
+    fn withdraw_leaves_custody_but_stays_circulating() {
+        let mut d = Desk::default();
+        d.create_market(spec(0, 0), 0).unwrap();
+        d.buy("aa", "bob", 100_000, 1).unwrap();
+        let before = d.market("aa").unwrap().clone();
+        let held = *before.balances.get("bob").unwrap();
+        let half = held / 2;
+
+        d.withdraw("aa", "bob", half).unwrap();
+        let m = d.market("aa").unwrap();
+        // supply and reserve untouched — only custody changed
+        assert_eq!(m.supply, before.supply);
+        assert_eq!(m.reserve_sats, before.reserve_sats);
+        assert_eq!(m.withdrawn, half);
+        assert_eq!(*m.balances.get("bob").unwrap(), held - half);
+        check(m); // sum(balances) + withdrawn == supply
+
+        // cannot withdraw more than the remaining custodial balance
+        assert_eq!(
+            d.withdraw("aa", "bob", held),
+            Err(DeskError::InsufficientBalance)
+        );
     }
 }

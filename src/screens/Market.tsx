@@ -12,6 +12,7 @@ import {
   Rocket,
   Pause,
   Play,
+  Download,
 } from "lucide-react";
 import { useNotification } from "../contexts/NotificationContext";
 
@@ -32,6 +33,7 @@ interface MarketView {
   status: Status;
   supply: number;
   reserve_sats: number;
+  withdrawn: number;
   spot_price_msat: number;
   progress_bp: number;
   creator_fee_bp: number;
@@ -151,6 +153,9 @@ export function Market({ onBack }: MarketProps) {
   const [sellPreview, setSellPreview] = useState<SellPreview | null>(null);
   const [busy, setBusy] = useState(false);
   const [tapdAssets, setTapdAssets] = useState<TapdAsset[]>([]);
+  const [withdrawAddr, setWithdrawAddr] = useState("");
+  const [withdrawAmount, setWithdrawAmount] = useState("");
+  const [withdrawFee, setWithdrawFee] = useState("1");
 
   // create form
   const [form, setForm] = useState({
@@ -287,6 +292,33 @@ export function Market({ onBack }: MarketProps) {
     }
   }
 
+  async function doWithdraw() {
+    if (!detail) return;
+    const amt = Math.floor(Number(withdrawAmount));
+    if (!withdrawAddr.trim() || !Number.isFinite(amt) || amt <= 0) {
+      notify("Adresse Taproot et quantité requises", "error");
+      return;
+    }
+    setBusy(true);
+    try {
+      const txid = await invoke<string>("market_withdraw_asset", {
+        tokenId: detail.token_id,
+        user: ME,
+        amount: amt,
+        address: withdrawAddr.trim(),
+        feeRateSatVb: Math.max(1, Math.floor(Number(withdrawFee) || 1)),
+      });
+      notify(`Retrait envoyé · tx ${txid.slice(0, 12)}…`, "success");
+      setWithdrawAddr("");
+      setWithdrawAmount("");
+      await refreshDetail(detail.token_id);
+    } catch (e) {
+      notify(String(e), "error");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function togglePause() {
     if (!detail) return;
     const paused = detail.status !== "paused";
@@ -414,6 +446,7 @@ export function Market({ onBack }: MarketProps) {
             </div>
             <div className="text-secondary" style={{ fontSize: 13 }}>
               Cap {detail.reserve_sats.toLocaleString()} sat · {detail.supply.toLocaleString()} en circulation · {detail.trade_count} trades
+              {detail.withdrawn > 0 && ` · ${detail.withdrawn.toLocaleString()} hors custody`}
             </div>
             <ProgressBar bp={detail.progress_bp} />
             {isCreator && (
@@ -501,6 +534,45 @@ export function Market({ onBack }: MarketProps) {
               )}
               <button className="btn btn-secondary" onClick={doSell} disabled={busy || !sellPreview || position === 0}>
                 <TrendingDown size={16} /> Vendre
+              </button>
+            </motion.div>
+          )}
+
+          {/* withdraw the custodial token balance on-chain */}
+          {position > 0 && (
+            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.14 }} className="glass-card" style={{ padding: 20, marginBottom: 20 }}>
+              <div className="text-secondary" style={{ marginBottom: 12 }}>
+                <Download size={16} style={{ marginRight: 8, verticalAlign: "middle" }} />
+                Retirer on-chain
+              </div>
+              <input
+                className="input"
+                placeholder="Adresse Taproot du destinataire (encode ce montant)"
+                value={withdrawAddr}
+                onChange={(e) => setWithdrawAddr(e.target.value)}
+                style={{ marginBottom: 10, fontFamily: "var(--font-mono)", fontSize: 12 }}
+              />
+              <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr", gap: 8, marginBottom: 10 }}>
+                <input
+                  className="input"
+                  type="number"
+                  placeholder={`Quantité (${detail.ticker})`}
+                  value={withdrawAmount}
+                  onChange={(e) => setWithdrawAmount(e.target.value)}
+                />
+                <input
+                  className="input"
+                  type="number"
+                  placeholder="Frais sat/vB"
+                  value={withdrawFee}
+                  onChange={(e) => setWithdrawFee(e.target.value)}
+                />
+              </div>
+              <div className="text-muted" style={{ fontSize: 11, marginBottom: 12 }}>
+                Sort le token de la custody du desk vers ta propre adresse tap. Il reste en circulation (adossé à la réserve) — génère l'adresse pour ce montant exact de cet asset.
+              </div>
+              <button className="btn btn-secondary" onClick={doWithdraw} disabled={busy || position === 0}>
+                <Download size={16} /> Retirer
               </button>
             </motion.div>
           )}

@@ -182,6 +182,7 @@ pub fn run() {
             market::commands::market_sell,
             market::commands::market_position,
             market::commands::market_set_paused,
+            market::commands::market_withdraw_asset,
         ]);
 
     #[cfg(mobile)]
