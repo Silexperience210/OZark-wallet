@@ -179,6 +179,46 @@ pub async fn fetch_trades(keys: &Keys, asset_id: &str) -> Result<Vec<TradeTapeEn
     Ok(trades)
 }
 
+/// Send an encrypted (NIP-17) direct message to a pubkey (hex). Used to carry
+/// the settlement request/response between a remote trader and a desk.
+pub async fn send_dm(keys: &Keys, to_hex: &str, message: &str) -> Result<(), String> {
+    let receiver = PublicKey::from_hex(to_hex).map_err(|e| e.to_string())?;
+    let client = Client::new(keys.clone());
+    for relay in DEFAULT_RELAYS {
+        client.add_relay(relay).await.map_err(|e| e.to_string())?;
+    }
+    client.connect().await;
+    client
+        .send_private_msg(receiver, message, Vec::<Tag>::new())
+        .await
+        .map_err(|e| e.to_string())?;
+    client.disconnect().await;
+    Ok(())
+}
+
+/// Fetch and decrypt the DMs addressed to us (NIP-17 gift wraps). Returns
+/// `(sender_pubkey_hex, plaintext)` pairs; undecryptable events are skipped.
+pub async fn receive_dms(keys: &Keys) -> Result<Vec<(String, String)>, String> {
+    let client = Client::new(keys.clone());
+    for relay in DEFAULT_RELAYS {
+        client.add_relay(relay).await.map_err(|e| e.to_string())?;
+    }
+    client.connect().await;
+    let filter = Filter::new().kind(Kind::GiftWrap).pubkey(keys.public_key());
+    let events = client
+        .fetch_events(filter, Duration::from_secs(8))
+        .await
+        .map_err(|e| e.to_string())?;
+    let mut out = Vec::new();
+    for event in events {
+        if let Ok(unwrapped) = client.unwrap_gift_wrap(&event).await {
+            out.push((unwrapped.sender.to_hex(), unwrapped.rumor.content));
+        }
+    }
+    client.disconnect().await;
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

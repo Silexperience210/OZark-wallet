@@ -14,6 +14,7 @@ pub mod curve;
 pub mod desk;
 pub mod identity;
 pub mod nostr_client;
+pub mod settle;
 pub mod store;
 
 pub use desk::Desk;
