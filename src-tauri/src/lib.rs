@@ -53,6 +53,8 @@ pub struct WalletState {
     /// Marketplace Nostr identity (NIP-06), derived from the seed at unlock.
     /// `None` while the wallet is locked.
     pub nostr: Arc<Mutex<Option<nostr::Keys>>>,
+    /// Remote settlement orders held by the desk, keyed by order id.
+    pub orders: Arc<Mutex<std::collections::HashMap<String, market::settle::Order>>>,
     /// Observable status of the background unlock tasks.
     pub bg_init: Arc<Mutex<BackgroundInit>>,
     /// Handles to the spawned background tasks so they can be aborted on delete.
@@ -62,6 +64,7 @@ pub struct WalletState {
 impl WalletState {
     pub fn new(data_dir: PathBuf) -> Self {
         let desk = market::store::load_or_default(&data_dir);
+        let orders = market::store::load_orders(&data_dir);
         Self {
             onchain: Arc::new(Mutex::new(None)),
             onchain_db_path: Arc::new(Mutex::new(None)),
@@ -70,6 +73,7 @@ impl WalletState {
             tor: Arc::new(tokio::sync::Mutex::new(TorService::new(data_dir))),
             desk: Arc::new(Mutex::new(desk)),
             nostr: Arc::new(Mutex::new(None)),
+            orders: Arc::new(Mutex::new(orders)),
             bg_init: Arc::new(Mutex::new(BackgroundInit::default())),
             bg_tasks: Arc::new(Mutex::new(Vec::new())),
         }
@@ -191,6 +195,9 @@ pub fn run() {
             market::commands::market_publish,
             market::commands::market_discover,
             market::commands::market_remote_history,
+            market::commands::market_remote_buy,
+            market::commands::market_check_responses,
+            market::commands::market_pay_and_prove,
         ]);
 
     #[cfg(mobile)]

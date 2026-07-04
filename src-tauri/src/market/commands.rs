@@ -17,6 +17,7 @@ use tauri::{command, AppHandle, State};
 use super::desk::{
     BuyPreview, Market, MarketSpec, MarketStatus, SellPreview, Side, Trade, Visibility,
 };
+use super::settle;
 use super::store;
 use crate::WalletState;
 
@@ -28,7 +29,7 @@ fn now_secs() -> u64 {
 }
 
 /// Build a token announcement (with a live snapshot) from a market.
-fn announcement_of(m: &Market) -> super::nostr_client::TokenAnnouncement {
+pub(crate) fn announcement_of(m: &Market) -> super::nostr_client::TokenAnnouncement {
     super::nostr_client::TokenAnnouncement {
         asset_id: m.token_id.clone(),
         ticker: m.ticker.clone(),
@@ -52,7 +53,11 @@ fn announcement_of(m: &Market) -> super::nostr_client::TokenAnnouncement {
 }
 
 /// Build a public tape entry from an executed trade.
-fn tape_entry(asset_id: &str, trader: &str, t: &Trade) -> super::nostr_client::TradeTapeEntry {
+pub(crate) fn tape_entry(
+    asset_id: &str,
+    trader: &str,
+    t: &Trade,
+) -> super::nostr_client::TradeTapeEntry {
     super::nostr_client::TradeTapeEntry {
         asset_id: asset_id.to_string(),
         side: match t.side {
@@ -424,4 +429,63 @@ pub async fn market_remote_history(
             supply_after: t.supply_after,
         })
         .collect())
+}
+
+/// Buyer side: ask a remote desk for a buy quote (sends an encrypted DM). The
+/// desk replies with an invoice, read back via `market_check_responses`.
+#[command]
+pub async fn market_remote_buy(
+    state: State<'_, WalletState>,
+    desk_pubkey: String,
+    asset_id: String,
+    budget_sats: u64,
+) -> Result<(), String> {
+    let keys = nostr_keys(&state)?;
+    let req = settle::DeskRequest::BuyQuote {
+        asset_id,
+        budget_sats,
+    };
+    let json = serde_json::to_string(&req).map_err(|e| e.to_string())?;
+    super::nostr_client::send_dm(&keys, &desk_pubkey, &json).await
+}
+
+/// Buyer side: read the desk responses (invoices / fills / errors) sent to us.
+#[command]
+pub async fn market_check_responses(
+    state: State<'_, WalletState>,
+) -> Result<Vec<settle::DeskResponse>, String> {
+    let keys = nostr_keys(&state)?;
+    let dms = super::nostr_client::receive_dms(&keys).await?;
+    Ok(dms
+        .into_iter()
+        .filter_map(|(_id, _sender, content)| serde_json::from_str(&content).ok())
+        .collect())
+}
+
+/// Buyer side: pay the desk's invoice over Lightning, then send the preimage as
+/// proof so the desk credits the tokens. Returns the preimage.
+#[command]
+pub async fn market_pay_and_prove(
+    state: State<'_, WalletState>,
+    desk_pubkey: String,
+    order_id: String,
+    invoice: String,
+) -> Result<String, String> {
+    // Pay via the Ark/Lightning service (clone it out of state, no lock across await).
+    let ark = {
+        let guard = state.ark.lock().map_err(|e| e.to_string())?;
+        guard.clone()
+    };
+    let ark = ark.ok_or("lightning not ready")?;
+    let preimage = ark.pay_lightning_invoice(invoice, None).await?;
+
+    // Send the payment proof back to the desk.
+    let keys = nostr_keys(&state)?;
+    let req = settle::DeskRequest::PaymentProof {
+        order_id,
+        preimage: preimage.clone(),
+    };
+    let json = serde_json::to_string(&req).map_err(|e| e.to_string())?;
+    super::nostr_client::send_dm(&keys, &desk_pubkey, &json).await?;
+    Ok(preimage)
 }

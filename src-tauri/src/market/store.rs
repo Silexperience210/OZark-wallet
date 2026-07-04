@@ -5,11 +5,14 @@
 //! trade, so mutating commands save through after each change. The file holds
 //! **accounting state** (reserves, custodial ledger, trade log) — not keys.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use super::desk::Desk;
+use super::settle::Order;
 
 const DESK_FILE: &str = "market-desk.json";
+const ORDERS_FILE: &str = "market-orders.json";
 
 fn desk_path(data_dir: &Path) -> PathBuf {
     data_dir.join(DESK_FILE)
@@ -45,6 +48,33 @@ pub fn save(data_dir: &Path, desk: &Desk) -> Result<(), String> {
         std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
     let json = serde_json::to_string_pretty(desk).map_err(|e| e.to_string())?;
+    std::fs::write(&path, json).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+fn orders_path(data_dir: &Path) -> PathBuf {
+    data_dir.join(ORDERS_FILE)
+}
+
+/// Load the desk's remote orders keyed by order id (empty if none).
+pub fn load_orders(data_dir: &Path) -> HashMap<String, Order> {
+    let path = orders_path(data_dir);
+    if !path.exists() {
+        return HashMap::new();
+    }
+    std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default()
+}
+
+/// Persist the desk's remote orders.
+pub fn save_orders(data_dir: &Path, orders: &HashMap<String, Order>) -> Result<(), String> {
+    let path = orders_path(data_dir);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    let json = serde_json::to_string_pretty(orders).map_err(|e| e.to_string())?;
     std::fs::write(&path, json).map_err(|e| e.to_string())?;
     Ok(())
 }
