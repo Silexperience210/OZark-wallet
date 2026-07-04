@@ -153,9 +153,11 @@ function PriceChart({ points }: { points: PricePoint[] }) {
 
 export function Market({ onBack }: MarketProps) {
   const { notify } = useNotification();
-  const [view, setView] = useState<"list" | "detail" | "create">("list");
+  const [view, setView] = useState<"list" | "detail" | "create" | "remote">("list");
   const [markets, setMarkets] = useState<MarketView[]>([]);
   const [remote, setRemote] = useState<DiscoveredToken[]>([]);
+  const [remoteDetail, setRemoteDetail] = useState<DiscoveredToken | null>(null);
+  const [remoteHistory, setRemoteHistory] = useState<PricePoint[]>([]);
   const [loading, setLoading] = useState(false);
   const [discovering, setDiscovering] = useState(false);
 
@@ -251,6 +253,19 @@ export function Market({ onBack }: MarketProps) {
     setSellPreview(null);
     setView("detail");
     await refreshDetail(tokenId);
+  }
+
+  // Open a remote (Nostr-discovered) token read-only, with its chart rebuilt
+  // from the public trade tape.
+  async function openRemote(d: DiscoveredToken) {
+    setRemoteDetail(d);
+    setRemoteHistory([]);
+    setView("remote");
+    try {
+      setRemoteHistory(await invoke<PricePoint[]>("market_remote_history", { assetId: d.ann.asset_id }));
+    } catch (e) {
+      console.error("remote history error:", e);
+    }
   }
 
   async function refreshDetail(tokenId: string) {
@@ -494,13 +509,7 @@ export function Market({ onBack }: MarketProps) {
                   </div>
                   <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
                     {remoteOnly.map((d) => (
-                      <RemoteRow
-                        key={`${d.desk_pubkey}:${d.ann.asset_id}`}
-                        d={d}
-                        onClick={() =>
-                          notify("Trading des tokens distants : bientôt (règlement Lightning, Phase D)", "info")
-                        }
-                      />
+                      <RemoteRow key={`${d.desk_pubkey}:${d.ann.asset_id}`} d={d} onClick={() => openRemote(d)} />
                     ))}
                   </div>
                 </>
@@ -674,6 +683,62 @@ export function Market({ onBack }: MarketProps) {
               </span>
             </div>
           )}
+        </>
+      )}
+
+      {/* ---------------- REMOTE (read-only) ---------------- */}
+      {view === "remote" && remoteDetail && (
+        <>
+          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="glass-card" style={{ padding: 24, marginBottom: 20 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+              <div>
+                <div style={{ fontSize: 24, fontWeight: 700 }}>{remoteDetail.ann.ticker}</div>
+                <div className="text-muted" style={{ fontSize: 13 }}>{remoteDetail.ann.name}</div>
+              </div>
+              <span
+                style={{
+                  fontSize: 11,
+                  padding: "3px 10px",
+                  borderRadius: 999,
+                  border: "1px solid #a855f7",
+                  color: "#a855f7",
+                  background: "#a855f71a",
+                }}
+              >
+                distant
+              </span>
+            </div>
+            <div
+              style={{
+                fontSize: 34,
+                fontWeight: 700,
+                marginTop: 12,
+                background: "linear-gradient(135deg, #fff, #a855f7)",
+                WebkitBackgroundClip: "text",
+                WebkitTextFillColor: "transparent",
+              }}
+            >
+              {priceSat(remoteDetail.ann.spot_price_msat)} sat
+            </div>
+            <div className="text-secondary" style={{ fontSize: 13 }}>
+              Cap {remoteDetail.ann.reserve_sats.toLocaleString()} sat · {remoteDetail.ann.supply.toLocaleString()} en circulation
+            </div>
+            <div className="text-muted" style={{ fontSize: 11, marginTop: 8, wordBreak: "break-all" }}>
+              desk {remoteDetail.desk_pubkey.slice(0, 16)}…
+            </div>
+          </motion.div>
+
+          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.05 }} className="glass-card" style={{ padding: 20, marginBottom: 20 }}>
+            <div className="text-secondary" style={{ marginBottom: 8 }}>Prix · tape Nostr</div>
+            <PriceChart points={remoteHistory} />
+          </motion.div>
+
+          <div className="glass-card" style={{ padding: 16, marginBottom: 20, fontSize: 13, display: "flex", gap: 10, alignItems: "center" }}>
+            <Globe size={18} style={{ color: "#a855f7", flexShrink: 0 }} />
+            <span className="text-muted">
+              Token distant — l'achat/vente contre ce desk arrive avec le règlement Lightning (Phase D). Pour l'instant, tu vois son prix et son historique circuler en public.
+            </span>
+          </div>
         </>
       )}
 
