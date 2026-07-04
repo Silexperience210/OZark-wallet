@@ -77,9 +77,6 @@ interface TapdAsset {
   decimal_display: number;
 }
 
-// The local wallet's custodial account id on its own desk. When remote trading
-// lands (Nostr), this becomes the buyer's pubkey.
-const ME = "me";
 // Nano-sat price resolution: keeps the integer curve params precise across a
 // wide range of start/end prices and supply caps.
 const DENOM = 1_000_000_000;
@@ -156,6 +153,10 @@ export function Market({ onBack }: MarketProps) {
   const [withdrawAddr, setWithdrawAddr] = useState("");
   const [withdrawAmount, setWithdrawAmount] = useState("");
   const [withdrawFee, setWithdrawFee] = useState("1");
+  // The trader's ledger account id = their Nostr pubkey (derived from the seed).
+  // Falls back to "me" if the wallet is locked / identity not derived yet.
+  const [me, setMe] = useState("me");
+  const [npub, setNpub] = useState("");
 
   // create form
   const [form, setForm] = useState({
@@ -173,6 +174,16 @@ export function Market({ onBack }: MarketProps) {
 
   useEffect(() => {
     loadMarkets();
+  }, []);
+
+  // Resolve the local Nostr identity so trades are keyed by the real pubkey.
+  useEffect(() => {
+    invoke<{ pubkey_hex: string; npub: string }>("get_nostr_identity")
+      .then((id) => {
+        setMe(id.pubkey_hex);
+        setNpub(id.npub);
+      })
+      .catch(() => {});
   }, []);
 
   // When opening the create form, pull the node's real minted Taproot assets so
@@ -214,7 +225,7 @@ export function Market({ onBack }: MarketProps) {
       const [m, h, pos] = await Promise.all([
         invoke<MarketView>("market_get", { tokenId }),
         invoke<PricePoint[]>("market_price_history", { tokenId }),
-        invoke<number>("market_position", { tokenId, user: ME }),
+        invoke<number>("market_position", { tokenId, user: me }),
       ]);
       setDetail(m);
       setHistory(h);
@@ -250,19 +261,19 @@ export function Market({ onBack }: MarketProps) {
       return;
     }
     let cancelled = false;
-    invoke<SellPreview>("market_quote_sell", { tokenId: detail.token_id, user: ME, amount: Math.floor(amount) })
+    invoke<SellPreview>("market_quote_sell", { tokenId: detail.token_id, user: me, amount: Math.floor(amount) })
       .then((p) => !cancelled && setSellPreview(p))
       .catch(() => !cancelled && setSellPreview(null));
     return () => {
       cancelled = true;
     };
-  }, [sellAmount, detail, view]);
+  }, [sellAmount, detail, view, me]);
 
   async function doBuy() {
     if (!detail || !buyPreview) return;
     setBusy(true);
     try {
-      await invoke("market_buy", { tokenId: detail.token_id, user: ME, budgetSats: Math.floor(Number(buyBudget)) });
+      await invoke("market_buy", { tokenId: detail.token_id, user: me, budgetSats: Math.floor(Number(buyBudget)) });
       notify(`Acheté ${buyPreview.tokens.toLocaleString()} ${detail.ticker}`, "success");
       setBuyBudget("");
       setBuyPreview(null);
@@ -279,7 +290,7 @@ export function Market({ onBack }: MarketProps) {
     if (!detail || !sellPreview) return;
     setBusy(true);
     try {
-      await invoke("market_sell", { tokenId: detail.token_id, user: ME, amount: Math.floor(Number(sellAmount)) });
+      await invoke("market_sell", { tokenId: detail.token_id, user: me, amount: Math.floor(Number(sellAmount)) });
       notify(`Vendu ${sellPreview.tokens.toLocaleString()} ${detail.ticker} → ${sellPreview.payout_sats.toLocaleString()} sats`, "success");
       setSellAmount("");
       setSellPreview(null);
@@ -303,7 +314,7 @@ export function Market({ onBack }: MarketProps) {
     try {
       const txid = await invoke<string>("market_withdraw_asset", {
         tokenId: detail.token_id,
-        user: ME,
+        user: me,
         amount: amt,
         address: withdrawAddr.trim(),
         feeRateSatVb: Math.max(1, Math.floor(Number(withdrawFee) || 1)),
@@ -348,7 +359,7 @@ export function Market({ onBack }: MarketProps) {
       token_id: form.token_id.trim(),
       ticker: form.ticker.trim().toUpperCase(),
       name: form.name.trim(),
-      creator: ME,
+      creator: me,
       params: {
         p0_num: p0,
         k_num: k,
@@ -374,7 +385,7 @@ export function Market({ onBack }: MarketProps) {
     }
   }
 
-  const isCreator = detail?.creator === ME;
+  const isCreator = detail?.creator === me;
 
   return (
     <div style={{ width: "100%", height: "100%", display: "flex", flexDirection: "column", padding: "24px", overflow: "auto" }}>
@@ -385,7 +396,9 @@ export function Market({ onBack }: MarketProps) {
       >
         <div>
           <h1 className="title-lg">Marché</h1>
-          <p className="text-muted">Tokens Taproot · bonding curve</p>
+          <p className="text-muted">
+            Tokens Taproot · bonding curve{npub && ` · ${npub.slice(0, 12)}…`}
+          </p>
         </div>
         <button className="btn btn-ghost" onClick={view === "list" ? onBack : () => setView("list")}>
           <ArrowLeft size={18} /> {view === "list" ? "Retour" : "Marché"}

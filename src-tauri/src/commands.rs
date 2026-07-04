@@ -79,6 +79,17 @@ async fn initialize_wallet_state(
         *guard = Some(onchain_db_path);
     }
 
+    // Derive the marketplace Nostr identity from the same seed (NIP-06). Failure
+    // is non-fatal — it only disables the remote marketplace, not the wallet.
+    match crate::market::identity::keys_from_mnemonic(mnemonic) {
+        Ok(keys) => {
+            if let Ok(mut guard) = state.nostr.lock() {
+                *guard = Some(keys);
+            }
+        }
+        Err(e) => log::error!("nostr identity derivation failed: {e}"),
+    }
+
     // Abort any background tasks left over from a previous unlock and reset status.
     if let Ok(mut tasks) = state.bg_tasks.lock() {
         for t in tasks.drain(..) {

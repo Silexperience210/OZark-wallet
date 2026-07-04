@@ -281,3 +281,14 @@ pub async fn market_withdraw_asset(
     }
     Ok(txid)
 }
+
+/// The local trader's Nostr identity (pubkey hex + npub), derived from the seed
+/// at unlock. This pubkey is the account id used across the marketplace.
+#[command]
+pub fn get_nostr_identity(
+    state: State<'_, WalletState>,
+) -> Result<super::identity::NostrIdentity, String> {
+    let guard = state.nostr.lock().map_err(|e| e.to_string())?;
+    let keys = guard.as_ref().ok_or("wallet locked")?;
+    super::identity::identity(keys)
+}

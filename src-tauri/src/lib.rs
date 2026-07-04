@@ -50,6 +50,9 @@ pub struct WalletState {
     /// Bonding-curve marketplace desk (reserves, ledger, trade log), loaded from
     /// the on-disk snapshot at startup and saved through on every trade.
     pub desk: Arc<Mutex<market::Desk>>,
+    /// Marketplace Nostr identity (NIP-06), derived from the seed at unlock.
+    /// `None` while the wallet is locked.
+    pub nostr: Arc<Mutex<Option<nostr::Keys>>>,
     /// Observable status of the background unlock tasks.
     pub bg_init: Arc<Mutex<BackgroundInit>>,
     /// Handles to the spawned background tasks so they can be aborted on delete.
@@ -66,6 +69,7 @@ impl WalletState {
             taproot: Arc::new(tokio::sync::Mutex::new(None)),
             tor: Arc::new(tokio::sync::Mutex::new(TorService::new(data_dir))),
             desk: Arc::new(Mutex::new(desk)),
+            nostr: Arc::new(Mutex::new(None)),
             bg_init: Arc::new(Mutex::new(BackgroundInit::default())),
             bg_tasks: Arc::new(Mutex::new(Vec::new())),
         }
@@ -183,6 +187,7 @@ pub fn run() {
             market::commands::market_position,
             market::commands::market_set_paused,
             market::commands::market_withdraw_asset,
+            market::commands::get_nostr_identity,
         ]);
 
     #[cfg(mobile)]
