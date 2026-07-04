@@ -12,6 +12,7 @@
 pub mod commands;
 pub mod curve;
 pub mod desk;
+pub mod identity;
 pub mod store;
 
 pub use desk::Desk;
