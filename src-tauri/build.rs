@@ -44,10 +44,13 @@ fn compile_protos() {
 /// `tapd-defaults.json` was embedded "via build.rs" but nothing actually read it.
 fn inject_tapd_defaults() {
     // The three compile-time keys and their matching JSON fields.
+    // SECURITY: the macaroon is intentionally NOT baked — a credential in a
+    // public APK is extractable and grants anyone access to the node. Only the
+    // (non-secret) host/cert may be injected; without a macaroon the default node
+    // stays disabled (see TapdDefaults::is_empty).
     let mapping = [
         ("OZARK_DEFAULT_TAPD_HOST", "host"),
         ("OZARK_DEFAULT_TAPD_CERT", "cert_pem"),
-        ("OZARK_DEFAULT_TAPD_MACAROON", "macaroon_hex"),
     ];
 
     // Re-run this build script when any of the env vars change.

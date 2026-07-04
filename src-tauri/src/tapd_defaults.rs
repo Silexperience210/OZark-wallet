@@ -34,9 +34,12 @@ impl TapdDefaults {
                 .unwrap_or("")
                 // Allow the cert to carry literal "\n" escapes in the env var.
                 .replace("\\n", "\n"),
-            macaroon_hex: option_env!("OZARK_DEFAULT_TAPD_MACAROON")
-                .unwrap_or("")
-                .to_string(),
+            // SECURITY: never bake a tapd macaroon into the (public, decompilable)
+            // APK — an admin credential in the binary lets anyone act on the node.
+            // The default node is therefore disabled (`is_empty()` below) until an
+            // authenticated gateway holds the macaroon server-side. Advanced users
+            // connect their own node from the UI.
+            macaroon_hex: String::new(),
         }
     }
 
