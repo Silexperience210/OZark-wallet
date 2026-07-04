@@ -14,6 +14,7 @@ import {
   Play,
   Download,
   Globe,
+  Zap,
 } from "lucide-react";
 import { useNotification } from "../contexts/NotificationContext";
 
@@ -94,6 +95,14 @@ interface DiscoveredToken {
   ann: TokenAnnouncement;
 }
 
+// Responses a desk sends back over DM (tagged by `kind`).
+type DeskResponse =
+  | { kind: "invoice"; order_id: string; invoice: string; tokens: number; cost_sats: number; fee_sats: number }
+  | { kind: "filled"; order_id: string; asset_id: string; side: string; tokens: number; sats: number }
+  | { kind: "pending"; order_id: string }
+  | { kind: "error"; message: string };
+type InvoiceResp = Extract<DeskResponse, { kind: "invoice" }>;
+
 // Nano-sat price resolution: keeps the integer curve params precise across a
 // wide range of start/end prices and supply caps.
 const DENOM = 1_000_000_000;
@@ -158,6 +167,9 @@ export function Market({ onBack }: MarketProps) {
   const [remote, setRemote] = useState<DiscoveredToken[]>([]);
   const [remoteDetail, setRemoteDetail] = useState<DiscoveredToken | null>(null);
   const [remoteHistory, setRemoteHistory] = useState<PricePoint[]>([]);
+  const [remoteBuyBudget, setRemoteBuyBudget] = useState("");
+  const [remoteInvoice, setRemoteInvoice] = useState<InvoiceResp | null>(null);
+  const [remoteBusy, setRemoteBusy] = useState(false);
   const [loading, setLoading] = useState(false);
   const [discovering, setDiscovering] = useState(false);
 
@@ -260,11 +272,83 @@ export function Market({ onBack }: MarketProps) {
   async function openRemote(d: DiscoveredToken) {
     setRemoteDetail(d);
     setRemoteHistory([]);
+    setRemoteInvoice(null);
+    setRemoteBuyBudget("");
     setView("remote");
     try {
       setRemoteHistory(await invoke<PricePoint[]>("market_remote_history", { assetId: d.ann.asset_id }));
     } catch (e) {
       console.error("remote history error:", e);
+    }
+  }
+
+  // Poll the desk's DM responses looking for a given kind, up to ~40s.
+  async function pollResponse(kind: DeskResponse["kind"]): Promise<DeskResponse | null> {
+    for (let i = 0; i < 10; i++) {
+      await new Promise((r) => setTimeout(r, 4000));
+      try {
+        const responses = await invoke<DeskResponse[]>("market_check_responses");
+        const match = responses.find((r) => r.kind === kind);
+        if (match) return match;
+      } catch (e) {
+        console.error("check responses error:", e);
+      }
+    }
+    return null;
+  }
+
+  // Buyer flow step 1: request a quote/invoice from the remote desk.
+  async function requestQuote() {
+    if (!remoteDetail) return;
+    const budget = Math.floor(Number(remoteBuyBudget));
+    if (!(budget > 0)) {
+      notify("Budget invalide", "error");
+      return;
+    }
+    setRemoteBusy(true);
+    try {
+      await invoke("market_remote_buy", {
+        deskPubkey: remoteDetail.desk_pubkey,
+        assetId: remoteDetail.ann.asset_id,
+        budgetSats: budget,
+      });
+      notify("Demande envoyée — attente de l'invoice…", "info");
+      const inv = await pollResponse("invoice");
+      if (inv && inv.kind === "invoice") {
+        setRemoteInvoice(inv);
+        notify("Invoice reçue", "success");
+      } else {
+        notify("Pas d'invoice reçue (desk hors ligne ?)", "error");
+      }
+    } catch (e) {
+      notify(String(e), "error");
+    } finally {
+      setRemoteBusy(false);
+    }
+  }
+
+  // Buyer flow step 2: pay the invoice, prove it, await the fill.
+  async function payAndProve() {
+    if (!remoteDetail || !remoteInvoice) return;
+    setRemoteBusy(true);
+    try {
+      await invoke("market_pay_and_prove", {
+        deskPubkey: remoteDetail.desk_pubkey,
+        orderId: remoteInvoice.order_id,
+        invoice: remoteInvoice.invoice,
+      });
+      notify("Payé — preuve envoyée, attente de confirmation…", "info");
+      setRemoteInvoice(null);
+      const f = await pollResponse("filled");
+      if (f && f.kind === "filled") {
+        notify(`Reçu ${f.tokens.toLocaleString()} ${remoteDetail.ann.ticker} ✅`, "success");
+      } else {
+        notify("Confirmation non reçue — le desk créditera à réception", "info");
+      }
+    } catch (e) {
+      notify(String(e), "error");
+    } finally {
+      setRemoteBusy(false);
     }
   }
 
@@ -733,12 +817,41 @@ export function Market({ onBack }: MarketProps) {
             <PriceChart points={remoteHistory} />
           </motion.div>
 
-          <div className="glass-card" style={{ padding: 16, marginBottom: 20, fontSize: 13, display: "flex", gap: 10, alignItems: "center" }}>
-            <Globe size={18} style={{ color: "#a855f7", flexShrink: 0 }} />
-            <span className="text-muted">
-              Token distant — l'achat/vente contre ce desk arrive avec le règlement Lightning (Phase D). Pour l'instant, tu vois son prix et son historique circuler en public.
-            </span>
-          </div>
+          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.1 }} className="glass-card" style={{ padding: 20, marginBottom: 20 }}>
+            <div className="text-secondary" style={{ marginBottom: 12 }}>
+              <TrendingUp size={16} style={{ marginRight: 8, verticalAlign: "middle", color: "#00f0ff" }} />
+              Acheter · règlement Lightning
+            </div>
+            {!remoteInvoice ? (
+              <>
+                <input
+                  className="input"
+                  type="number"
+                  placeholder="Budget (sats)"
+                  value={remoteBuyBudget}
+                  onChange={(e) => setRemoteBuyBudget(e.target.value)}
+                  style={{ marginBottom: 10 }}
+                />
+                <button className="btn btn-primary" onClick={requestQuote} disabled={remoteBusy}>
+                  {remoteBusy ? <span className="spinner" /> : <TrendingUp size={16} />} Demander une invoice
+                </button>
+              </>
+            ) : (
+              <>
+                <div className="text-muted" style={{ fontSize: 13, marginBottom: 12 }}>
+                  Invoice : <b>{(remoteInvoice.cost_sats + remoteInvoice.fee_sats).toLocaleString()} sat</b> → ≈{" "}
+                  {remoteInvoice.tokens.toLocaleString()} {remoteDetail.ann.ticker}
+                </div>
+                <button className="btn btn-primary" onClick={payAndProve} disabled={remoteBusy}>
+                  {remoteBusy ? <span className="spinner" /> : <Zap size={16} />} Payer &amp; recevoir
+                </button>
+              </>
+            )}
+            <div className="text-muted" style={{ fontSize: 11, marginTop: 10, display: "flex", gap: 8, alignItems: "flex-start" }}>
+              <Globe size={13} style={{ flexShrink: 0, marginTop: 2, color: "#a855f7" }} />
+              <span>Custodial : le desk doit être en ligne. Tu paies une invoice LN, il crédite tes tokens (preuve par préimage).</span>
+            </div>
+          </motion.div>
         </>
       )}
 
