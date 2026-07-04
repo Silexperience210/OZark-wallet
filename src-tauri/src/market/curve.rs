@@ -237,7 +237,8 @@ impl CurveParams {
         let mut lo: u64 = 0;
         let mut hi: u64 = max_delta;
         while lo < hi {
-            let mid = lo + (hi - lo + 1) / 2;
+            // Round the midpoint up (overflow-safe) to converge toward the max.
+            let mid = lo + (hi - lo).div_ceil(2);
             match self.cost_to_buy(supply, mid) {
                 Ok(c) if c <= budget_sats => lo = mid,
                 _ => hi = mid - 1,
