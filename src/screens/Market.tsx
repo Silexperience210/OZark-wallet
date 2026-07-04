@@ -13,6 +13,7 @@ import {
   Pause,
   Play,
   Download,
+  Globe,
 } from "lucide-react";
 import { useNotification } from "../contexts/NotificationContext";
 
@@ -77,6 +78,22 @@ interface TapdAsset {
   decimal_display: number;
 }
 
+// A token announcement published on Nostr by a desk (from market_discover).
+interface TokenAnnouncement {
+  asset_id: string;
+  ticker: string;
+  name: string;
+  supply: number;
+  reserve_sats: number;
+  spot_price_msat: number;
+  migration_sats: number;
+  status: Status;
+}
+interface DiscoveredToken {
+  desk_pubkey: string;
+  ann: TokenAnnouncement;
+}
+
 // Nano-sat price resolution: keeps the integer curve params precise across a
 // wide range of start/end prices and supply caps.
 const DENOM = 1_000_000_000;
@@ -138,7 +155,9 @@ export function Market({ onBack }: MarketProps) {
   const { notify } = useNotification();
   const [view, setView] = useState<"list" | "detail" | "create">("list");
   const [markets, setMarkets] = useState<MarketView[]>([]);
+  const [remote, setRemote] = useState<DiscoveredToken[]>([]);
   const [loading, setLoading] = useState(false);
+  const [discovering, setDiscovering] = useState(false);
 
   // detail state
   const [detail, setDetail] = useState<MarketView | null>(null);
@@ -174,6 +193,7 @@ export function Market({ onBack }: MarketProps) {
 
   useEffect(() => {
     loadMarkets();
+    discover();
   }, []);
 
   // Resolve the local Nostr identity so trades are keyed by the real pubkey.
@@ -208,6 +228,19 @@ export function Market({ onBack }: MarketProps) {
       notify(String(e), "error");
     } finally {
       setLoading(false);
+    }
+  }
+
+  // Pull the public catalogue announced by other desks on Nostr. Best-effort:
+  // relays can be slow/unreachable, so failures are silent (no nagging).
+  async function discover() {
+    setDiscovering(true);
+    try {
+      setRemote(await invoke<DiscoveredToken[]>("market_discover"));
+    } catch (e) {
+      console.error("discover error:", e);
+    } finally {
+      setDiscovering(false);
     }
   }
 
@@ -375,6 +408,12 @@ export function Market({ onBack }: MarketProps) {
     try {
       await invoke("market_create", { spec });
       notify(`Marché ${spec.ticker} créé`, "success");
+      // Public tokens are auto-announced on Nostr so everyone can discover them.
+      if (spec.visibility === "public") {
+        invoke("market_publish", { tokenId: spec.token_id })
+          .then(() => notify("Annoncé sur Nostr — découvrable par tous", "success"))
+          .catch((e) => notify(`Annonce Nostr différée : ${e}`, "error"));
+      }
       setForm((f) => ({ ...f, token_id: "", ticker: "", name: "", seedSats: "0" }));
       setView("list");
       await loadMarkets();
@@ -386,6 +425,11 @@ export function Market({ onBack }: MarketProps) {
   }
 
   const isCreator = detail?.creator === me;
+  // Remote tokens = discovered on Nostr, not run by this desk and not already
+  // in the local list.
+  const remoteOnly = remote.filter(
+    (d) => d.desk_pubkey !== me && !markets.some((m) => m.token_id === d.ann.asset_id)
+  );
 
   return (
     <div style={{ width: "100%", height: "100%", display: "flex", flexDirection: "column", padding: "24px", overflow: "auto" }}>
@@ -412,24 +456,56 @@ export function Market({ onBack }: MarketProps) {
             <button className="btn btn-primary" onClick={() => setView("create")}>
               <Plus size={16} /> Créer un token
             </button>
-            <button className="btn btn-ghost" onClick={loadMarkets} disabled={loading}>
-              {loading ? <span className="spinner" /> : <RefreshCw size={16} />} Actualiser
+            <button
+              className="btn btn-ghost"
+              onClick={() => {
+                loadMarkets();
+                discover();
+              }}
+              disabled={loading || discovering}
+            >
+              {loading || discovering ? <span className="spinner" /> : <RefreshCw size={16} />} Actualiser
             </button>
           </div>
-          {markets.length === 0 ? (
+          {markets.length === 0 && remoteOnly.length === 0 ? (
             <div className="glass-card" style={{ padding: 32, textAlign: "center" }}>
               <Store size={28} style={{ opacity: 0.5, marginBottom: 8 }} />
-              <div className="text-muted">Aucun token listé pour l'instant.</div>
+              <div className="text-muted">
+                {discovering ? "Recherche sur Nostr…" : "Aucun token pour l'instant."}
+              </div>
               <div className="text-muted" style={{ fontSize: 12, marginTop: 4 }}>
-                Crée le premier avec « Créer un token ».
+                Crée le premier avec « Créer un token » — il sera annoncé sur Nostr.
               </div>
             </div>
           ) : (
-            <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-              {markets.map((m) => (
-                <MarketRow key={m.token_id} m={m} onClick={() => openDetail(m.token_id)} />
-              ))}
-            </div>
+            <>
+              {markets.length > 0 && (
+                <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                  {markets.map((m) => (
+                    <MarketRow key={m.token_id} m={m} onClick={() => openDetail(m.token_id)} />
+                  ))}
+                </div>
+              )}
+              {remoteOnly.length > 0 && (
+                <>
+                  <div className="text-muted" style={{ fontSize: 12, margin: "20px 0 10px" }}>
+                    <Globe size={13} style={{ verticalAlign: "middle", marginRight: 6 }} />
+                    Tokens distants (Nostr){discovering ? " · …" : ""}
+                  </div>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                    {remoteOnly.map((d) => (
+                      <RemoteRow
+                        key={`${d.desk_pubkey}:${d.ann.asset_id}`}
+                        d={d}
+                        onClick={() =>
+                          notify("Trading des tokens distants : bientôt (règlement Lightning, Phase D)", "info")
+                        }
+                      />
+                    ))}
+                  </div>
+                </>
+              )}
+            </>
           )}
         </>
       )}
@@ -760,6 +836,49 @@ function MarketRow({ m, onClick }: { m: MarketView; onClick: () => void }) {
       <div style={{ textAlign: "right", flexShrink: 0 }}>
         <div style={{ fontWeight: 600 }}>{priceSat(m.spot_price_msat)} sat</div>
         <div className="text-muted" style={{ fontSize: 11 }}>{m.reserve_sats.toLocaleString()} sat cap</div>
+      </div>
+      <ChevronRight size={18} className="text-muted" style={{ flexShrink: 0 }} />
+    </div>
+  );
+}
+
+function RemoteRow({ d, onClick }: { d: DiscoveredToken; onClick: () => void }) {
+  const a = d.ann;
+  const progress = a.migration_sats > 0 ? Math.min(100, (a.reserve_sats * 100) / a.migration_sats) : 0;
+  return (
+    <div
+      onClick={onClick}
+      role="button"
+      className="glass-card"
+      style={{ padding: 16, cursor: "pointer", display: "flex", alignItems: "center", gap: 14, opacity: 0.92 }}
+    >
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <span style={{ fontWeight: 700 }}>{a.ticker}</span>
+          <span
+            style={{
+              fontSize: 11,
+              padding: "3px 10px",
+              borderRadius: 999,
+              border: "1px solid #a855f7",
+              color: "#a855f7",
+              background: "#a855f71a",
+              whiteSpace: "nowrap",
+            }}
+          >
+            distant
+          </span>
+        </div>
+        <div className="text-muted" style={{ fontSize: 12, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+          {a.name}
+        </div>
+        <div style={{ height: 4, borderRadius: 999, background: "rgba(255,255,255,0.08)", overflow: "hidden", marginTop: 8 }}>
+          <div style={{ width: `${progress}%`, height: "100%", background: "linear-gradient(90deg,#00f0ff,#a855f7)" }} />
+        </div>
+      </div>
+      <div style={{ textAlign: "right", flexShrink: 0 }}>
+        <div style={{ fontWeight: 600 }}>{priceSat(a.spot_price_msat)} sat</div>
+        <div className="text-muted" style={{ fontSize: 11 }}>{a.reserve_sats.toLocaleString()} sat cap</div>
       </div>
       <ChevronRight size={18} className="text-muted" style={{ flexShrink: 0 }} />
     </div>

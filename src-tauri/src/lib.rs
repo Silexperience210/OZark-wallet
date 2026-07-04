@@ -188,6 +188,8 @@ pub fn run() {
             market::commands::market_set_paused,
             market::commands::market_withdraw_asset,
             market::commands::get_nostr_identity,
+            market::commands::market_publish,
+            market::commands::market_discover,
         ]);
 
     #[cfg(mobile)]
