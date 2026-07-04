@@ -84,7 +84,22 @@ async fn initialize_wallet_state(
     match crate::market::identity::keys_from_mnemonic(mnemonic) {
         Ok(keys) => {
             if let Ok(mut guard) = state.nostr.lock() {
-                *guard = Some(keys);
+                *guard = Some(keys.clone());
+            }
+            // Spawn the desk listener so this node serves remote buyers while the
+            // app is open (the same logic will later run 24/7 on Umbrel).
+            let ctx = crate::market::desk_listener::ListenerCtx {
+                keys,
+                desk: state.desk.clone(),
+                orders: state.orders.clone(),
+                ark: state.ark.clone(),
+                data_dir: WalletState::data_dir(app_handle)?,
+            };
+            let listener = tauri::async_runtime::spawn(async move {
+                crate::market::desk_listener::run(ctx).await;
+            });
+            if let Ok(mut tasks) = state.bg_tasks.lock() {
+                tasks.push(listener);
             }
         }
         Err(e) => log::error!("nostr identity derivation failed: {e}"),

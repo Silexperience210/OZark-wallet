@@ -28,7 +28,7 @@ fn now_secs() -> u64 {
 }
 
 /// Build a token announcement (with a live snapshot) from a market.
-fn announcement_of(m: &Market) -> super::nostr_client::TokenAnnouncement {
+pub(crate) fn announcement_of(m: &Market) -> super::nostr_client::TokenAnnouncement {
     super::nostr_client::TokenAnnouncement {
         asset_id: m.token_id.clone(),
         ticker: m.ticker.clone(),
@@ -52,7 +52,11 @@ fn announcement_of(m: &Market) -> super::nostr_client::TokenAnnouncement {
 }
 
 /// Build a public tape entry from an executed trade.
-fn tape_entry(asset_id: &str, trader: &str, t: &Trade) -> super::nostr_client::TradeTapeEntry {
+pub(crate) fn tape_entry(
+    asset_id: &str,
+    trader: &str,
+    t: &Trade,
+) -> super::nostr_client::TradeTapeEntry {
     super::nostr_client::TradeTapeEntry {
         asset_id: asset_id.to_string(),
         side: match t.side {

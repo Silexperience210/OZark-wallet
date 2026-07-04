@@ -12,6 +12,7 @@
 pub mod commands;
 pub mod curve;
 pub mod desk;
+pub mod desk_listener;
 pub mod identity;
 pub mod nostr_client;
 pub mod settle;
