@@ -47,6 +47,7 @@ pub enum AuthError {
 }
 
 /// Result of a successful verification: the caller's identity.
+#[derive(Debug, PartialEq, Eq)]
 pub struct VerifiedAuth {
     /// x-only pubkey, 64-hex — the account id all ownership checks use.
     pub pubkey_hex: String,
