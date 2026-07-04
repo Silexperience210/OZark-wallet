@@ -292,3 +292,54 @@ pub fn get_nostr_identity(
     let keys = guard.as_ref().ok_or("wallet locked")?;
     super::identity::identity(keys)
 }
+
+/// Read the local Nostr keypair out of state (clone), or fail if locked.
+fn nostr_keys(state: &State<'_, WalletState>) -> Result<nostr::Keys, String> {
+    let guard = state.nostr.lock().map_err(|e| e.to_string())?;
+    guard.as_ref().ok_or("wallet locked".to_string()).cloned()
+}
+
+/// Publish (or refresh) a public market's announcement on the default relays so
+/// other wallets can discover it. Includes a live price snapshot.
+#[command]
+pub async fn market_publish(
+    state: State<'_, WalletState>,
+    token_id: String,
+) -> Result<String, String> {
+    // Build the announcement under the std lock, then drop it before the await.
+    let ann = {
+        let desk = state.desk.lock().map_err(|e| e.to_string())?;
+        let m = desk.market(&token_id).map_err(|e| e.to_string())?;
+        super::nostr_client::TokenAnnouncement {
+            asset_id: m.token_id.clone(),
+            ticker: m.ticker.clone(),
+            name: m.name.clone(),
+            p0_num: m.params.p0_num,
+            k_num: m.params.k_num,
+            denom: m.params.denom,
+            supply_cap: m.params.supply_cap,
+            migration_sats: m.params.migration_sats,
+            creator_fee_bp: m.creator_fee_bp,
+            supply: m.supply,
+            reserve_sats: m.reserve_sats,
+            spot_price_msat: m.spot_price_msat().unwrap_or(0),
+            status: match m.status {
+                MarketStatus::Trading => "trading",
+                MarketStatus::Paused => "paused",
+                MarketStatus::Migrated => "migrated",
+            }
+            .to_string(),
+        }
+    };
+    let keys = nostr_keys(&state)?;
+    super::nostr_client::publish_announcement(&keys, &ann).await
+}
+
+/// Discover public tokens announced on Nostr (remote markets run by other desks).
+#[command]
+pub async fn market_discover(
+    state: State<'_, WalletState>,
+) -> Result<Vec<super::nostr_client::DiscoveredToken>, String> {
+    let keys = nostr_keys(&state)?;
+    super::nostr_client::fetch_catalog(&keys).await
+}

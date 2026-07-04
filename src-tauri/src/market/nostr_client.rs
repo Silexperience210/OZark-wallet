@@ -10,6 +10,8 @@
 //! network); the async relay I/O (publish / fetch) lives alongside and is not
 //! exercised in CI (no outbound network in the test sandbox).
 
+use std::time::Duration;
+
 use nostr_sdk::prelude::*;
 use serde::{Deserialize, Serialize};
 
@@ -36,6 +38,21 @@ pub struct TokenAnnouncement {
     pub supply_cap: u64,
     pub migration_sats: u64,
     pub creator_fee_bp: u16,
+    // Live snapshot as of the last publish. Because the event is addressable
+    // (replaceable), the desk re-publishes on trades, so the public catalogue
+    // reflects an up-to-date price without any private channel.
+    pub supply: u64,
+    pub reserve_sats: u64,
+    pub spot_price_msat: u64,
+    pub status: String,
+}
+
+/// A token discovered on the relays, with the (signed) desk pubkey that runs it.
+#[derive(Debug, Clone, Serialize)]
+pub struct DiscoveredToken {
+    /// Hex pubkey of the desk — taken from the event signature, not spoofable.
+    pub desk_pubkey: String,
+    pub ann: TokenAnnouncement,
 }
 
 /// Build a signed, addressable announcement event for a token.
@@ -55,6 +72,45 @@ pub fn parse_token_event(event: &Event) -> Option<TokenAnnouncement> {
     serde_json::from_str(&event.content).ok()
 }
 
+/// Connect to the default relays, publish (replace) the token announcement, and
+/// disconnect. Returns the event id hex.
+pub async fn publish_announcement(keys: &Keys, ann: &TokenAnnouncement) -> Result<String, String> {
+    let event = build_token_event(keys, ann)?;
+    let client = Client::new(keys.clone());
+    for relay in DEFAULT_RELAYS {
+        client.add_relay(relay).await.map_err(|e| e.to_string())?;
+    }
+    client.connect().await;
+    client.send_event(&event).await.map_err(|e| e.to_string())?;
+    client.disconnect().await;
+    Ok(event.id.to_hex())
+}
+
+/// Query the default relays for all token announcements (the public catalogue).
+pub async fn fetch_catalog(keys: &Keys) -> Result<Vec<DiscoveredToken>, String> {
+    let client = Client::new(keys.clone());
+    for relay in DEFAULT_RELAYS {
+        client.add_relay(relay).await.map_err(|e| e.to_string())?;
+    }
+    client.connect().await;
+    let filter = Filter::new().kind(Kind::Custom(MARKET_KIND));
+    let events = client
+        .fetch_events(filter, Duration::from_secs(8))
+        .await
+        .map_err(|e| e.to_string())?;
+    client.disconnect().await;
+    let out = events
+        .into_iter()
+        .filter_map(|e| {
+            parse_token_event(&e).map(|ann| DiscoveredToken {
+                desk_pubkey: e.pubkey.to_hex(),
+                ann,
+            })
+        })
+        .collect();
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -70,6 +126,10 @@ mod tests {
             supply_cap: 1_000_000,
             migration_sats: 0,
             creator_fee_bp: 100,
+            supply: 1_234,
+            reserve_sats: 5_678,
+            spot_price_msat: 1_500,
+            status: "trading".into(),
         }
     }
 
