@@ -17,6 +17,7 @@ import {
   Send,
   ScanLine,
   History,
+  Store,
 } from "lucide-react";
 import { scanQrCode } from "../lib/scan";
 import { useI18n } from "../i18n/I18nContext";
@@ -32,10 +33,11 @@ interface DashboardProps {
   onLightning: () => void;
   onArk: () => void;
   onHistory: () => void;
+  onMarket: () => void;
   onLightningPay?: (invoice: string) => void;
 }
 
-export function Dashboard({ onLogout, onBackup, onTaproot, onLightning, onArk, onHistory, onLightningPay }: DashboardProps) {
+export function Dashboard({ onLogout, onBackup, onTaproot, onLightning, onArk, onHistory, onMarket, onLightningPay }: DashboardProps) {
   const { t, lang, setLang } = useI18n();
   const { notify } = useNotification();
   const [showSeed, setShowSeed] = useState(false);
@@ -280,6 +282,9 @@ export function Dashboard({ onLogout, onBackup, onTaproot, onLightning, onArk, o
           <p className="text-muted">{t("dashboard.subtitle")}</p>
         </div>
         <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
+          <button className="btn btn-ghost" onClick={onMarket}>
+            <Store size={18} /> Marché
+          </button>
           <button className="btn btn-ghost" onClick={onHistory}>
             <History size={18} /> {t("dashboard.history")}
           </button>
