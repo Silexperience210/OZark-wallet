@@ -197,8 +197,10 @@ pub async fn send_dm(keys: &Keys, to_hex: &str, message: &str) -> Result<(), Str
 }
 
 /// Fetch and decrypt the DMs addressed to us (NIP-17 gift wraps). Returns
-/// `(sender_pubkey_hex, plaintext)` pairs; undecryptable events are skipped.
-pub async fn receive_dms(keys: &Keys) -> Result<Vec<(String, String)>, String> {
+/// `(wrap_event_id_hex, sender_pubkey_hex, plaintext)` triples; the stable outer
+/// gift-wrap id lets callers dedupe / key orders idempotently. Undecryptable
+/// events are skipped.
+pub async fn receive_dms(keys: &Keys) -> Result<Vec<(String, String, String)>, String> {
     let client = Client::new(keys.clone());
     for relay in DEFAULT_RELAYS {
         client.add_relay(relay).await.map_err(|e| e.to_string())?;
@@ -211,8 +213,9 @@ pub async fn receive_dms(keys: &Keys) -> Result<Vec<(String, String)>, String> {
         .map_err(|e| e.to_string())?;
     let mut out = Vec::new();
     for event in events {
+        let wrap_id = event.id.to_hex();
         if let Ok(unwrapped) = client.unwrap_gift_wrap(&event).await {
-            out.push((unwrapped.sender.to_hex(), unwrapped.rumor.content));
+            out.push((wrap_id, unwrapped.sender.to_hex(), unwrapped.rumor.content));
         }
     }
     client.disconnect().await;
