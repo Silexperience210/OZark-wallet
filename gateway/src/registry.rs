@@ -84,35 +84,6 @@ impl Registry {
         self.conn.lock().unwrap_or_else(|p| p.into_inner())
     }
 
-    /// Record a freshly minted asset as owned by `owner_pubkey`, linked to the
-    /// mint's `batch_key` (audit trail + status lookup by batch).
-    ///
-    /// Idempotent for the *same* owner (re-recording is a no-op), but rejects an
-    /// attempt to claim an asset already owned by someone else — a mint can only
-    /// establish ownership once.
-    pub fn record_mint(
-        &self,
-        asset_id: &str,
-        owner_pubkey: &str,
-        batch_key: &str,
-        created_at: i64,
-    ) -> Result<(), RegistryError> {
-        let conn = self.lock();
-        if let Some(existing) = owner_of_conn(&conn, asset_id)? {
-            return if existing == owner_pubkey {
-                Ok(())
-            } else {
-                Err(RegistryError::AlreadyOwned(asset_id.to_string()))
-            };
-        }
-        conn.execute(
-            "INSERT INTO ownership (asset_id, owner_pubkey, batch_key, created_at)
-             VALUES (?1, ?2, ?3, ?4)",
-            (asset_id, owner_pubkey, batch_key, created_at),
-        )?;
-        Ok(())
-    }
-
     /// Owner pubkey of an asset, if registered.
     pub fn owner_of(&self, asset_id: &str) -> Result<Option<String>, RegistryError> {
         let conn = self.lock();
@@ -242,20 +213,7 @@ impl Registry {
         let Some(owner) = owner else {
             return Ok(false);
         };
-        // Establish ownership unless the asset id is already claimed by someone else.
-        match owner_of_conn(&tx, asset_id)? {
-            Some(existing) if existing != owner => {
-                return Err(RegistryError::AlreadyOwned(asset_id.to_string()));
-            }
-            Some(_) => {} // already recorded for this owner (idempotent)
-            None => {
-                tx.execute(
-                    "INSERT INTO ownership (asset_id, owner_pubkey, batch_key, created_at)
-                     VALUES (?1, ?2, ?3, ?4)",
-                    (asset_id, &owner, batch_key, created_at),
-                )?;
-            }
-        }
+        insert_ownership(&tx, asset_id, &owner, batch_key, created_at)?;
         tx.execute(
             "DELETE FROM pending_mints WHERE batch_key = ?1",
             [batch_key],
@@ -299,6 +257,31 @@ fn owner_of_conn(conn: &Connection, asset_id: &str) -> Result<Option<String>, Re
     }
 }
 
+/// Establish ownership of `asset_id`. Idempotent for the same owner; rejects an
+/// asset already owned by someone else — a mint can only claim ownership once.
+/// Runs on the caller's connection/transaction so it can be composed atomically.
+fn insert_ownership(
+    conn: &Connection,
+    asset_id: &str,
+    owner_pubkey: &str,
+    batch_key: &str,
+    created_at: i64,
+) -> Result<(), RegistryError> {
+    if let Some(existing) = owner_of_conn(conn, asset_id)? {
+        return if existing == owner_pubkey {
+            Ok(())
+        } else {
+            Err(RegistryError::AlreadyOwned(asset_id.to_string()))
+        };
+    }
+    conn.execute(
+        "INSERT INTO ownership (asset_id, owner_pubkey, batch_key, created_at)
+         VALUES (?1, ?2, ?3, ?4)",
+        (asset_id, owner_pubkey, batch_key, created_at),
+    )?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -311,10 +294,17 @@ mod tests {
         Registry::open_in_memory().unwrap()
     }
 
+    /// Mint `asset` to `owner` through the real path: a pending claim resolved to
+    /// the asset id (the batch key doubles as a unique claim id in tests).
+    fn mint(r: &Registry, batch: &str, asset: &str, owner: &str, ts: i64) {
+        r.add_pending_mint(batch, "", owner, "n", 1, ts).unwrap();
+        r.resolve_pending_mint(batch, asset, ts).unwrap();
+    }
+
     #[test]
     fn records_and_reads_owner() {
         let r = reg();
-        r.record_mint("asset1", ALICE, "", 100).unwrap();
+        mint(&r, "b1", "asset1", ALICE, 100);
         assert_eq!(r.owner_of("asset1").unwrap().as_deref(), Some(ALICE));
         assert!(r.is_owner("asset1", ALICE).unwrap());
         assert!(!r.is_owner("asset1", BOB).unwrap());
@@ -328,19 +318,21 @@ mod tests {
     }
 
     #[test]
-    fn record_mint_is_idempotent_for_same_owner() {
+    fn resolving_same_owner_again_is_idempotent() {
         let r = reg();
-        r.record_mint("asset1", ALICE, "", 100).unwrap();
-        // Re-recording for the same owner is a no-op, not an error.
-        r.record_mint("asset1", ALICE, "", 200).unwrap();
+        mint(&r, "b1", "asset1", ALICE, 100);
+        // A second claim resolving to the same asset for the same owner is a no-op.
+        mint(&r, "b1", "asset1", ALICE, 200);
         assert_eq!(r.owner_of("asset1").unwrap().as_deref(), Some(ALICE));
     }
 
     #[test]
     fn rejects_reclaim_by_different_owner() {
         let r = reg();
-        r.record_mint("asset1", ALICE, "", 100).unwrap();
-        let err = r.record_mint("asset1", BOB, "", 200).unwrap_err();
+        mint(&r, "b1", "asset1", ALICE, 100);
+        // A different owner's claim resolving to the same asset id is rejected.
+        r.add_pending_mint("b2", "", BOB, "n", 1, 200).unwrap();
+        let err = r.resolve_pending_mint("b2", "asset1", 200).unwrap_err();
         assert!(matches!(err, RegistryError::AlreadyOwned(_)));
         // Ownership is unchanged.
         assert_eq!(r.owner_of("asset1").unwrap().as_deref(), Some(ALICE));
@@ -349,11 +341,11 @@ mod tests {
     #[test]
     fn assets_of_scopes_by_owner() {
         let r = reg();
-        r.record_mint("a1", ALICE, "", 1).unwrap();
-        r.record_mint("a2", ALICE, "", 2).unwrap();
-        r.record_mint("b1", BOB, "", 3).unwrap();
+        mint(&r, "b1", "a1", ALICE, 1);
+        mint(&r, "b2", "a2", ALICE, 2);
+        mint(&r, "b3", "b1asset", BOB, 3);
         assert_eq!(r.assets_of(ALICE).unwrap(), vec!["a1", "a2"]);
-        assert_eq!(r.assets_of(BOB).unwrap(), vec!["b1"]);
+        assert_eq!(r.assets_of(BOB).unwrap(), vec!["b1asset"]);
         assert!(r.assets_of(CAROL).unwrap().is_empty());
     }
 
