@@ -522,11 +522,11 @@ mod tests {
         let r = reg();
         r.add_pending_receive("taddr1", "X", BOB, 250, 1).unwrap();
         assert_eq!(r.pending_receives().unwrap().len(), 1);
-        assert!(r.resolve_receive("taddr1", 2).unwrap());
+        assert!(r.resolve_receive("taddr1").unwrap());
         assert_eq!(r.balance_of("X", BOB).unwrap(), 250);
         assert!(r.pending_receives().unwrap().is_empty());
         // Resolving again is a no-op (idempotent — pending row is gone).
-        assert!(!r.resolve_receive("taddr1", 3).unwrap());
+        assert!(!r.resolve_receive("taddr1").unwrap());
         assert_eq!(r.balance_of("X", BOB).unwrap(), 250);
     }
 }
