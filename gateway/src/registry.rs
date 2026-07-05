@@ -91,8 +91,7 @@ impl Registry {
     }
 
     /// True iff `pubkey` owns `asset_id`. Unregistered assets are owned by nobody.
-    // Phase 2: the isolation check every send/burn goes through.
-    #[allow(dead_code)]
+    /// The isolation check every send/burn goes through.
     pub fn is_owner(&self, asset_id: &str, pubkey: &str) -> Result<bool, RegistryError> {
         Ok(self.owner_of(asset_id)?.as_deref() == Some(pubkey))
     }

@@ -329,6 +329,52 @@ impl TapdClient {
         })
     }
 
+    /// Send an asset to a Taproot Asset address (on-chain). The address encodes the
+    /// asset id and amount, so the caller's ownership is checked by decoding it
+    /// first (see the route). Returns the anchor txid.
+    pub async fn send_asset(&mut self, addr: &str, fee_rate_sat_vb: u32) -> Result<String, String> {
+        let req = taprpc::SendAssetRequest {
+            tap_addrs: vec![addr.to_string()],
+            fee_rate: fee_rate_sat_vb.saturating_mul(250),
+            ..Default::default()
+        };
+        let transfer = self
+            .assets
+            .send_asset(req)
+            .await
+            .map_err(|e| format!("send_asset: {e}"))?
+            .into_inner()
+            .transfer
+            .ok_or("send_asset: no transfer returned")?;
+        Ok(hex::encode(transfer.anchor_tx_hash))
+    }
+
+    /// Burn (destroy) `amount` units of an asset. Returns the anchor txid.
+    pub async fn burn_asset(&mut self, asset_id: &str, amount: u64) -> Result<String, String> {
+        let req = taprpc::BurnAssetRequest {
+            amount_to_burn: amount,
+            confirmation_text: "assets will be destroyed".to_string(),
+            asset: Some(taprpc::burn_asset_request::Asset::AssetIdStr(
+                asset_id.to_string(),
+            )),
+            ..Default::default()
+        };
+        let txid = self
+            .assets
+            .burn_asset(req)
+            .await
+            .map_err(|e| format!("burn_asset: {e}"))?
+            .into_inner()
+            .burn_transfer
+            .map(|t| {
+                let mut h = t.anchor_tx_hash;
+                h.reverse();
+                hex::encode(h)
+            })
+            .unwrap_or_default();
+        Ok(txid)
+    }
+
     /// List minting batches, mapping each batch key to its (possibly empty) txid.
     /// Used to fill in a pending mint's txid before matching it to an asset.
     pub async fn list_batches(&mut self) -> Result<Vec<BatchRef>, String> {
