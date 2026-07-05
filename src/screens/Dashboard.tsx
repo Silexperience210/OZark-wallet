@@ -34,10 +34,11 @@ interface DashboardProps {
   onArk: () => void;
   onHistory: () => void;
   onMarket: () => void;
+  onGateway: () => void;
   onLightningPay?: (invoice: string) => void;
 }
 
-export function Dashboard({ onLogout, onBackup, onTaproot, onLightning, onArk, onHistory, onMarket, onLightningPay }: DashboardProps) {
+export function Dashboard({ onLogout, onBackup, onTaproot, onLightning, onArk, onHistory, onMarket, onGateway, onLightningPay }: DashboardProps) {
   const { t, lang, setLang } = useI18n();
   const { notify } = useNotification();
   const [showSeed, setShowSeed] = useState(false);
@@ -284,6 +285,9 @@ export function Dashboard({ onLogout, onBackup, onTaproot, onLightning, onArk, o
         <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
           <button className="btn btn-ghost" onClick={onMarket}>
             <Store size={18} /> Marché
+          </button>
+          <button className="btn btn-ghost" onClick={onGateway}>
+            <Shield size={18} /> Vault
           </button>
           <button className="btn btn-ghost" onClick={onHistory}>
             <History size={18} /> {t("dashboard.history")}
