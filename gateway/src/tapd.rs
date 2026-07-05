@@ -196,11 +196,15 @@ impl TapdClient {
                         .as_ref()
                         .map(|d| d.decimal_display)
                         .unwrap_or(0),
+                    // AnchorInfo exposes the anchor as `anchor_outpoint` ("txid:vout").
+                    // For a freshly minted asset the anchor is the mint tx, so this
+                    // txid equals the mint batch's txid — the reconciliation link.
                     anchor_txid: a
                         .chain_anchor
                         .as_ref()
-                        .map(|c| c.anchor_txid.clone())
-                        .unwrap_or_default(),
+                        .and_then(|c| c.anchor_outpoint.split(':').next())
+                        .unwrap_or_default()
+                        .to_string(),
                 })
             })
             .collect();
