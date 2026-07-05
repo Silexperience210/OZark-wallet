@@ -1,6 +1,7 @@
 mod ark;
 mod backup;
 mod commands;
+mod gateway;
 // `pub` so the not-yet-wired bonding-curve math counts as public API and does
 // not trip clippy's `dead_code` under `-D warnings`. Made private once the desk
 // commands consume it.
@@ -199,6 +200,16 @@ pub fn run() {
             market::commands::market_check_responses,
             market::commands::market_pay_and_prove,
             market::commands::market_remote_sell,
+            gateway::commands::save_gateway_config,
+            gateway::commands::load_gateway_config,
+            gateway::commands::gateway_list_assets,
+            gateway::commands::gateway_balance,
+            gateway::commands::gateway_mint,
+            gateway::commands::gateway_mint_status,
+            gateway::commands::gateway_receive,
+            gateway::commands::gateway_send,
+            gateway::commands::gateway_burn,
+            gateway::commands::gateway_transfer,
         ]);
 
     #[cfg(mobile)]
