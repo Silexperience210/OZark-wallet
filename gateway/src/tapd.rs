@@ -96,6 +96,14 @@ pub struct BatchRef {
     pub batch_txid: String,
 }
 
+/// An incoming-transfer event for one of our receive addresses.
+#[derive(Debug, Clone)]
+pub struct AddrReceiveEvent {
+    pub addr: String,
+    /// True once the transfer is fully received & confirmed (safe to credit).
+    pub completed: bool,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct UniverseStats {
     pub num_assets: i64,
@@ -373,6 +381,48 @@ impl TapdClient {
             })
             .unwrap_or_default();
         Ok(txid)
+    }
+
+    /// Generate a Taproot Asset address to receive `amount` of `asset_id`. The
+    /// gateway remembers which pubkey this address is for, and credits them once an
+    /// incoming transfer to it confirms (see reconcile_receives).
+    pub async fn new_address(&mut self, asset_id: &str, amount: u64) -> Result<String, String> {
+        let asset_id = hex::decode(asset_id).map_err(|e| format!("invalid asset id: {e}"))?;
+        let resp = self
+            .assets
+            .new_addr(taprpc::NewAddrRequest {
+                asset_id,
+                amt: amount,
+                ..Default::default()
+            })
+            .await
+            .map_err(|e| format!("new_addr: {e}"))?
+            .into_inner();
+        Ok(resp.encoded)
+    }
+
+    /// Incoming-transfer events for our receive addresses, each flagged completed
+    /// (fully received & confirmed) or not.
+    pub async fn addr_receives(&mut self) -> Result<Vec<AddrReceiveEvent>, String> {
+        let resp = self
+            .assets
+            .addr_receives(taprpc::AddrReceivesRequest::default())
+            .await
+            .map_err(|e| format!("addr_receives: {e}"))?
+            .into_inner();
+        let out = resp
+            .events
+            .into_iter()
+            .map(|e| AddrReceiveEvent {
+                addr: e
+                    .addr
+                    .as_ref()
+                    .map(|a| a.encoded.clone())
+                    .unwrap_or_default(),
+                completed: e.status == taprpc::AddrEventStatus::Completed as i32,
+            })
+            .collect();
+        Ok(out)
     }
 
     /// List minting batches, mapping each batch key to its (possibly empty) txid.

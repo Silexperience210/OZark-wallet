@@ -1,7 +1,9 @@
 //! HTTP routes. Every endpoint (except `/health`) requires a valid NIP-98 auth
-//! header. Reads are scoped to the caller's owned assets; `POST /v1/mint` records
-//! a new asset's ownership (async — resolved by reconciliation). Send/burn (which
-//! enforce owner == caller) arrive in Phase 3.
+//! header. Reads are scoped to the caller's balances; mutating actions
+//! (mint/receive/send/burn/transfer) check and move the caller's balance in the
+//! custodial ledger, so no user can touch another's holdings.
+
+use std::collections::HashMap;
 
 use axum::body::Bytes;
 use axum::extract::{Query, State};
@@ -12,7 +14,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::auth::{authenticate, now_secs};
 use crate::error::{GatewayError, GatewayResult};
-use crate::reconcile::reconcile_mints;
+use crate::reconcile::reconcile_all;
 use crate::state::AppState;
 use crate::tapd::{AssetInfo, DecodedAddr, UniverseRoot, UniverseStats};
 
@@ -23,24 +25,14 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/universe/stats", get(universe_stats))
         .route("/v1/universe/roots", get(universe_roots))
         .route("/v1/decode", get(decode))
+        .route("/v1/balance", get(balance))
         .route("/v1/mint", post(mint))
         .route("/v1/mint/status", get(mint_status))
+        .route("/v1/receive", post(receive))
         .route("/v1/send", post(send))
         .route("/v1/burn", post(burn))
+        .route("/v1/transfer", post(transfer))
         .with_state(state)
-}
-
-/// Ownership gate for mutating actions: the caller must be the registered owner of
-/// `asset_id`, else 403. This is the core per-user isolation guarantee — the whole
-/// reason the gateway holds the macaroon instead of the app.
-fn require_owner(state: &AppState, asset_id: &str, pubkey: &str) -> GatewayResult<()> {
-    if state.registry.is_owner(asset_id, pubkey)? {
-        Ok(())
-    } else {
-        Err(GatewayError::Forbidden(format!(
-            "{pubkey} does not own asset {asset_id}"
-        )))
-    }
 }
 
 /// Unauthenticated liveness probe.
@@ -69,30 +61,55 @@ fn auth_body(
     Ok(authenticate(&state.auth, headers, method, uri, body)?)
 }
 
-/// The caller's assets: tapd's asset list intersected with the ownership
-/// registry. Assets not registered to this pubkey are never returned — the core
-/// isolation guarantee.
+/// One of the caller's holdings: their ledger balance plus tapd metadata.
+#[derive(Debug, Serialize)]
+struct HeldAsset {
+    asset_id: String,
+    name: String,
+    /// The **caller's** balance (not the node's total holding).
+    amount: u64,
+    asset_type: String,
+    decimal_display: u32,
+}
+
+/// The caller's holdings: their non-zero ledger balances, enriched with asset
+/// metadata from tapd. Reconciliation runs first so confirmed mints/receives show
+/// up without a separate status poll.
 async fn list_assets(
     State(state): State<AppState>,
     method: Method,
     uri: Uri,
     headers: HeaderMap,
-) -> GatewayResult<Json<Vec<AssetInfo>>> {
+) -> GatewayResult<Json<Vec<HeldAsset>>> {
     let pubkey = auth_get(&state, &headers, &method, &uri)?;
     let mut tapd = state.tapd.clone();
-    // Opportunistically resolve any of the caller's pending mints so a freshly
-    // confirmed asset shows up here without a separate status poll. Best-effort.
-    if let Err(e) = reconcile_mints(&mut tapd, &state.registry).await {
-        log::warn!("reconcile during list_assets: {e}");
+    reconcile_all(&mut tapd, &state.registry).await;
+
+    let holdings = state.registry.holdings(&pubkey)?;
+    if holdings.is_empty() {
+        return Ok(Json(vec![]));
     }
-    let owned: std::collections::HashSet<String> =
-        state.registry.assets_of(&pubkey)?.into_iter().collect();
-    let all = tapd.list_assets().await.map_err(GatewayError::Upstream)?;
-    let mine = all
+    let meta: HashMap<String, AssetInfo> = tapd
+        .list_assets()
+        .await
+        .map_err(GatewayError::Upstream)?
         .into_iter()
-        .filter(|a| owned.contains(&a.asset_id))
+        .map(|a| (a.asset_id.clone(), a))
         .collect();
-    Ok(Json(mine))
+    let out = holdings
+        .into_iter()
+        .map(|(asset_id, amount)| {
+            let m = meta.get(&asset_id);
+            HeldAsset {
+                name: m.map(|m| m.name.clone()).unwrap_or_default(),
+                asset_type: m.map(|m| m.asset_type.clone()).unwrap_or_default(),
+                decimal_display: m.map(|m| m.decimal_display).unwrap_or(0),
+                asset_id,
+                amount,
+            }
+        })
+        .collect();
+    Ok(Json(out))
 }
 
 /// Global universe stats (not owner-scoped — public aggregate data).
@@ -132,8 +149,7 @@ struct DecodeQuery {
     addr: String,
 }
 
-/// Decode a Taproot Asset address (read-only helper). The `addr` query param is
-/// part of the URL and is therefore covered by the signed NIP-98 `u` tag.
+/// Decode a Taproot Asset address (read-only helper).
 async fn decode(
     State(state): State<AppState>,
     method: Method,
@@ -154,6 +170,37 @@ async fn decode(
 }
 
 #[derive(Debug, Deserialize)]
+struct BalanceQuery {
+    asset_id: String,
+}
+
+#[derive(Debug, Serialize)]
+struct BalanceResponse {
+    asset_id: String,
+    amount: u64,
+}
+
+/// The caller's balance of one asset.
+async fn balance(
+    State(state): State<AppState>,
+    method: Method,
+    uri: Uri,
+    headers: HeaderMap,
+    Query(q): Query<BalanceQuery>,
+) -> GatewayResult<Json<BalanceResponse>> {
+    let pubkey = auth_get(&state, &headers, &method, &uri)?;
+    let asset_id = q.asset_id.trim();
+    if asset_id.is_empty() {
+        return Err(GatewayError::BadRequest("asset_id is required".into()));
+    }
+    let amount = state.registry.balance_of(asset_id, &pubkey)?;
+    Ok(Json(BalanceResponse {
+        asset_id: asset_id.to_string(),
+        amount,
+    }))
+}
+
+#[derive(Debug, Deserialize)]
 struct MintRequest {
     name: String,
     #[serde(default)]
@@ -170,16 +217,12 @@ struct MintRequest {
 struct MintResponse {
     batch_key: String,
     batch_txid: String,
-    /// Always `pending` right after mint — the asset id appears once it confirms.
     status: String,
 }
 
-/// Mint a new asset on the shared node and record the caller as its owner. The
-/// request body is bound to the NIP-98 signature (payload tag), so the recorded
-/// owner is exactly the signer. Because minting is async, ownership is held as a
-/// pending claim keyed by the batch and resolved to the asset id by reconciliation.
-///
-/// `Bytes` must be the last extractor (it consumes the request body).
+/// Mint a new asset and record the caller as its owner. Minting is async, so the
+/// caller is credited the full amount only once the genesis confirms (see
+/// reconciliation). The body is bound to the NIP-98 signature.
 async fn mint(
     State(state): State<AppState>,
     method: Method,
@@ -200,12 +243,13 @@ async fn mint(
             "amount must be > 0 for a normal asset".into(),
         ));
     }
+    let amount = if collectible { 1 } else { req.amount };
 
     let mut tapd = state.tapd.clone();
     let outcome = tapd
         .mint_asset(
             req.name.trim(),
-            req.amount,
+            amount,
             req.meta.as_deref().unwrap_or(""),
             collectible,
             req.fee_rate_sat_vb.unwrap_or(0),
@@ -218,7 +262,7 @@ async fn mint(
         &outcome.batch_txid,
         &pubkey,
         req.name.trim(),
-        req.amount as i64,
+        amount as i64,
         now_secs() as i64,
     )?;
 
@@ -236,14 +280,13 @@ struct MintStatusQuery {
 
 #[derive(Debug, Serialize)]
 struct MintStatusResponse {
-    /// `pending` while the mint is unconfirmed, `minted` once resolved.
     status: String,
     batch_txid: String,
     asset_id: Option<String>,
 }
 
-/// Report a mint's status, running reconciliation first so it flips to `minted`
-/// as soon as the asset confirms. Only the mint's owner may query it.
+/// Report a mint's status, reconciling first so it flips to `minted` (and credits
+/// the balance) as soon as the asset confirms. Owner-gated.
 async fn mint_status(
     State(state): State<AppState>,
     method: Method,
@@ -254,11 +297,8 @@ async fn mint_status(
     let pubkey = auth_get(&state, &headers, &method, &uri)?;
 
     let mut tapd = state.tapd.clone();
-    if let Err(e) = reconcile_mints(&mut tapd, &state.registry).await {
-        log::warn!("reconcile during mint_status: {e}");
-    }
+    reconcile_all(&mut tapd, &state.registry).await;
 
-    // Still pending?
     if let Some(p) = state.registry.pending_mint(&q.batch_key)? {
         if p.owner_pubkey != pubkey {
             return Err(GatewayError::Forbidden("not your mint".into()));
@@ -270,10 +310,9 @@ async fn mint_status(
         }));
     }
 
-    // Resolved: the ownership row carries the batch key.
-    match state.registry.asset_by_batch_key(&q.batch_key)? {
-        Some(asset_id) => {
-            if state.registry.owner_of(&asset_id)?.as_deref() != Some(pubkey.as_str()) {
+    match state.registry.mint_result(&q.batch_key)? {
+        Some((asset_id, owner)) => {
+            if owner != pubkey {
                 return Err(GatewayError::Forbidden("not your mint".into()));
             }
             Ok(Json(MintStatusResponse {
@@ -284,6 +323,53 @@ async fn mint_status(
         }
         None => Err(GatewayError::BadRequest("unknown batch_key".into())),
     }
+}
+
+#[derive(Debug, Deserialize)]
+struct ReceiveRequest {
+    asset_id: String,
+    amount: u64,
+}
+
+#[derive(Debug, Serialize)]
+struct ReceiveResponse {
+    /// The Taproot Asset address to receive to; the caller is credited once an
+    /// incoming transfer to it confirms.
+    addr: String,
+}
+
+/// Generate a receive address for the caller. On confirmation of an incoming
+/// transfer, reconciliation credits the caller's balance.
+async fn receive(
+    State(state): State<AppState>,
+    method: Method,
+    uri: Uri,
+    headers: HeaderMap,
+    body: Bytes,
+) -> GatewayResult<Json<ReceiveResponse>> {
+    let pubkey = auth_body(&state, &headers, &method, &uri, &body)?;
+    let req: ReceiveRequest = serde_json::from_slice(&body)
+        .map_err(|e| GatewayError::BadRequest(format!("invalid receive body: {e}")))?;
+    if req.asset_id.trim().is_empty() {
+        return Err(GatewayError::BadRequest("asset_id is required".into()));
+    }
+    if req.amount == 0 {
+        return Err(GatewayError::BadRequest("amount must be > 0".into()));
+    }
+
+    let mut tapd = state.tapd.clone();
+    let addr = tapd
+        .new_address(req.asset_id.trim(), req.amount)
+        .await
+        .map_err(GatewayError::Upstream)?;
+    state.registry.add_pending_receive(
+        &addr,
+        req.asset_id.trim(),
+        &pubkey,
+        req.amount,
+        now_secs() as i64,
+    )?;
+    Ok(Json(ReceiveResponse { addr }))
 }
 
 #[derive(Debug, Deserialize)]
@@ -299,9 +385,10 @@ struct TxResponse {
     txid: String,
 }
 
-/// Send an asset out to a Taproot Asset address. The address is decoded to learn
-/// which asset is being spent; the caller must own it (403 otherwise); then tapd
-/// performs the on-chain transfer. Body is bound to the NIP-98 signature.
+/// Send an asset out to a Taproot Asset address. The asset id and amount are read
+/// from the decoded address; the caller's balance is **debited first** (reserved)
+/// and refunded if tapd rejects the send — so a failed send never loses funds and
+/// an insufficient balance is rejected (403) before touching the node.
 async fn send(
     State(state): State<AppState>,
     method: Method,
@@ -317,18 +404,29 @@ async fn send(
     }
 
     let mut tapd = state.tapd.clone();
-    // The address carries the asset id; decode it to enforce ownership.
     let decoded = tapd
         .decode_addr(req.addr.trim())
         .await
         .map_err(GatewayError::Upstream)?;
-    require_owner(&state, &decoded.asset_id, &pubkey)?;
 
-    let txid = tapd
+    // Reserve the caller's balance; errors (incl. insufficient) reject before send.
+    state
+        .registry
+        .debit(&decoded.asset_id, &pubkey, decoded.amount)?;
+
+    match tapd
         .send_asset(req.addr.trim(), req.fee_rate_sat_vb.unwrap_or(0))
         .await
-        .map_err(GatewayError::Upstream)?;
-    Ok(Json(TxResponse { txid }))
+    {
+        Ok(txid) => Ok(Json(TxResponse { txid })),
+        Err(e) => {
+            // Refund the reservation so a failed send never loses funds.
+            let _ = state
+                .registry
+                .credit(&decoded.asset_id, &pubkey, decoded.amount);
+            Err(GatewayError::Upstream(e))
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -337,7 +435,8 @@ struct BurnRequest {
     amount: u64,
 }
 
-/// Burn (destroy) some of an asset the caller owns (403 otherwise).
+/// Burn (destroy) some of an asset the caller owns. Debits first, refunds on tapd
+/// failure.
 async fn burn(
     State(state): State<AppState>,
     method: Method,
@@ -348,18 +447,71 @@ async fn burn(
     let pubkey = auth_body(&state, &headers, &method, &uri, &body)?;
     let req: BurnRequest = serde_json::from_slice(&body)
         .map_err(|e| GatewayError::BadRequest(format!("invalid burn body: {e}")))?;
-    if req.asset_id.trim().is_empty() {
+    let asset_id = req.asset_id.trim();
+    if asset_id.is_empty() {
         return Err(GatewayError::BadRequest("asset_id is required".into()));
     }
     if req.amount == 0 {
         return Err(GatewayError::BadRequest("amount must be > 0".into()));
     }
 
-    require_owner(&state, req.asset_id.trim(), &pubkey)?;
+    state.registry.debit(asset_id, &pubkey, req.amount)?;
+
     let mut tapd = state.tapd.clone();
-    let txid = tapd
-        .burn_asset(req.asset_id.trim(), req.amount)
-        .await
-        .map_err(GatewayError::Upstream)?;
-    Ok(Json(TxResponse { txid }))
+    match tapd.burn_asset(asset_id, req.amount).await {
+        Ok(txid) => Ok(Json(TxResponse { txid })),
+        Err(e) => {
+            let _ = state.registry.credit(asset_id, &pubkey, req.amount);
+            Err(GatewayError::Upstream(e))
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct TransferRequest {
+    asset_id: String,
+    to_pubkey: String,
+    amount: u64,
+}
+
+#[derive(Debug, Serialize)]
+struct TransferResponse {
+    status: String,
+}
+
+/// Instant internal transfer between two gateway users: a pure ledger move (debit
+/// caller, credit recipient), atomic, no on-chain transaction and no fee.
+async fn transfer(
+    State(state): State<AppState>,
+    method: Method,
+    uri: Uri,
+    headers: HeaderMap,
+    body: Bytes,
+) -> GatewayResult<Json<TransferResponse>> {
+    let pubkey = auth_body(&state, &headers, &method, &uri, &body)?;
+    let req: TransferRequest = serde_json::from_slice(&body)
+        .map_err(|e| GatewayError::BadRequest(format!("invalid transfer body: {e}")))?;
+    let asset_id = req.asset_id.trim();
+    let to = req.to_pubkey.trim();
+    if asset_id.is_empty() {
+        return Err(GatewayError::BadRequest("asset_id is required".into()));
+    }
+    if req.amount == 0 {
+        return Err(GatewayError::BadRequest("amount must be > 0".into()));
+    }
+    if to.len() != 64 || !to.chars().all(|c| c.is_ascii_hexdigit()) {
+        return Err(GatewayError::BadRequest(
+            "to_pubkey must be a 64-hex Nostr pubkey".into(),
+        ));
+    }
+    if to == pubkey {
+        return Err(GatewayError::BadRequest(
+            "cannot transfer to yourself".into(),
+        ));
+    }
+
+    state.registry.transfer(asset_id, &pubkey, to, req.amount)?;
+    Ok(Json(TransferResponse {
+        status: "ok".into(),
+    }))
 }

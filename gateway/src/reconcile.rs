@@ -11,6 +11,42 @@ use crate::auth::now_secs;
 use crate::registry::Registry;
 use crate::tapd::TapdClient;
 
+/// Run both reconcilers, logging (not propagating) errors — a best-effort refresh
+/// invoked on requests so confirmed mints/receives surface promptly.
+pub async fn reconcile_all(tapd: &mut TapdClient, registry: &Registry) {
+    if let Err(e) = reconcile_mints(tapd, registry).await {
+        log::warn!("reconcile mints: {e}");
+    }
+    if let Err(e) = reconcile_receives(tapd, registry).await {
+        log::warn!("reconcile receives: {e}");
+    }
+}
+
+/// Credit confirmed incoming transfers to the users that generated their receive
+/// addresses. Returns the number newly credited.
+pub async fn reconcile_receives(
+    tapd: &mut TapdClient,
+    registry: &Registry,
+) -> Result<usize, String> {
+    let pending = registry.pending_receives().map_err(|e| e.to_string())?;
+    if pending.is_empty() {
+        return Ok(0);
+    }
+    let events = tapd.addr_receives().await?;
+    let mut resolved = 0;
+    for p in pending {
+        let done = events.iter().any(|e| e.completed && e.addr == p.addr);
+        if done
+            && registry
+                .resolve_receive(&p.addr)
+                .map_err(|e| e.to_string())?
+        {
+            resolved += 1;
+        }
+    }
+    Ok(resolved)
+}
+
 /// Resolve as many pending mints as possible. Returns the number newly resolved.
 /// Best-effort: surfaces tapd errors to the caller (which logs) but never panics.
 pub async fn reconcile_mints(tapd: &mut TapdClient, registry: &Registry) -> Result<usize, String> {

@@ -55,6 +55,13 @@ impl From<crate::auth::AuthError> for GatewayError {
 
 impl From<crate::registry::RegistryError> for GatewayError {
     fn from(e: crate::registry::RegistryError) -> Self {
-        GatewayError::Upstream(e.to_string())
+        use crate::registry::RegistryError as R;
+        let msg = e.to_string();
+        match e {
+            // The caller lacks the balance to act — a client-side condition.
+            R::InsufficientBalance { .. } => GatewayError::Forbidden(msg),
+            R::BatchClaimed(_) => GatewayError::BadRequest(msg),
+            R::Db(_) => GatewayError::Upstream(msg),
+        }
     }
 }
