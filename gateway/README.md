@@ -23,9 +23,9 @@ at the root:
 So the node becomes a shared tool: everyone can read/mint, but only the owner of an
 asset can move or destroy it.
 
-## Status — Phase 1 (this crate)
+## Status — Phases 1–3 (this crate)
 
-Skeleton + auth + read + registry. Endpoints:
+Skeleton + auth + registry + read + mint + owner-gated send/burn. Endpoints:
 
 | Method | Path                  | Auth | Notes |
 |--------|-----------------------|------|-------|
@@ -34,9 +34,22 @@ Skeleton + auth + read + registry. Endpoints:
 | GET    | `/v1/universe/stats`  | yes  | global aggregate (not owner-scoped) |
 | GET    | `/v1/universe/roots`  | yes  | global aggregate (not owner-scoped) |
 | GET    | `/v1/decode?addr=…`   | yes  | decode a Taproot Asset address |
+| POST   | `/v1/mint`            | yes  | mint an asset; records the caller as owner (async — see below) |
+| GET    | `/v1/mint/status?batch_key=…` | yes | mint progress; owner-gated |
+| POST   | `/v1/send`            | yes  | send an asset out; **owner-gated** (asset id decoded from the address) |
+| POST   | `/v1/burn`            | yes  | burn an asset; **owner-gated** |
 
-Mint (records ownership), send/burn (ownership-checked), and pay-to-mint arrive in
-later phases. See `../.claude` memory `ozark-marketplace` for the full roadmap.
+**Ownership gate:** `send`/`burn` require the caller to be the registered owner of
+the asset, else **403**. This is the core isolation guarantee.
+
+**Async mint:** tapd broadcasts a batch immediately but the asset id only exists
+once the genesis confirms. The gateway holds a pending owner claim keyed by batch
+and resolves it to the asset id by matching an asset's anchor txid to the batch
+txid — reconciliation runs opportunistically on `/v1/assets` and `/v1/mint/status`.
+
+Not yet: **receiving** an asset from another gateway user (ownership handoff / a
+multi-owner model), Taproot-assets-over-Lightning, pay-to-mint, and rewiring the app
+to the gateway. See `../.claude` memory `ozark-marketplace` for the full roadmap.
 
 ## Authentication (NIP-98)
 

@@ -25,7 +25,22 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/decode", get(decode))
         .route("/v1/mint", post(mint))
         .route("/v1/mint/status", get(mint_status))
+        .route("/v1/send", post(send))
+        .route("/v1/burn", post(burn))
         .with_state(state)
+}
+
+/// Ownership gate for mutating actions: the caller must be the registered owner of
+/// `asset_id`, else 403. This is the core per-user isolation guarantee — the whole
+/// reason the gateway holds the macaroon instead of the app.
+fn require_owner(state: &AppState, asset_id: &str, pubkey: &str) -> GatewayResult<()> {
+    if state.registry.is_owner(asset_id, pubkey)? {
+        Ok(())
+    } else {
+        Err(GatewayError::Forbidden(format!(
+            "{pubkey} does not own asset {asset_id}"
+        )))
+    }
 }
 
 /// Unauthenticated liveness probe.
@@ -269,4 +284,82 @@ async fn mint_status(
         }
         None => Err(GatewayError::BadRequest("unknown batch_key".into())),
     }
+}
+
+#[derive(Debug, Deserialize)]
+struct SendRequest {
+    /// Taproot Asset address to send to (encodes the asset id + amount).
+    addr: String,
+    #[serde(default)]
+    fee_rate_sat_vb: Option<u32>,
+}
+
+#[derive(Debug, Serialize)]
+struct TxResponse {
+    txid: String,
+}
+
+/// Send an asset out to a Taproot Asset address. The address is decoded to learn
+/// which asset is being spent; the caller must own it (403 otherwise); then tapd
+/// performs the on-chain transfer. Body is bound to the NIP-98 signature.
+async fn send(
+    State(state): State<AppState>,
+    method: Method,
+    uri: Uri,
+    headers: HeaderMap,
+    body: Bytes,
+) -> GatewayResult<Json<TxResponse>> {
+    let pubkey = auth_body(&state, &headers, &method, &uri, &body)?;
+    let req: SendRequest = serde_json::from_slice(&body)
+        .map_err(|e| GatewayError::BadRequest(format!("invalid send body: {e}")))?;
+    if req.addr.trim().is_empty() {
+        return Err(GatewayError::BadRequest("addr is required".into()));
+    }
+
+    let mut tapd = state.tapd.clone();
+    // The address carries the asset id; decode it to enforce ownership.
+    let decoded = tapd
+        .decode_addr(req.addr.trim())
+        .await
+        .map_err(GatewayError::Upstream)?;
+    require_owner(&state, &decoded.asset_id, &pubkey)?;
+
+    let txid = tapd
+        .send_asset(req.addr.trim(), req.fee_rate_sat_vb.unwrap_or(0))
+        .await
+        .map_err(GatewayError::Upstream)?;
+    Ok(Json(TxResponse { txid }))
+}
+
+#[derive(Debug, Deserialize)]
+struct BurnRequest {
+    asset_id: String,
+    amount: u64,
+}
+
+/// Burn (destroy) some of an asset the caller owns (403 otherwise).
+async fn burn(
+    State(state): State<AppState>,
+    method: Method,
+    uri: Uri,
+    headers: HeaderMap,
+    body: Bytes,
+) -> GatewayResult<Json<TxResponse>> {
+    let pubkey = auth_body(&state, &headers, &method, &uri, &body)?;
+    let req: BurnRequest = serde_json::from_slice(&body)
+        .map_err(|e| GatewayError::BadRequest(format!("invalid burn body: {e}")))?;
+    if req.asset_id.trim().is_empty() {
+        return Err(GatewayError::BadRequest("asset_id is required".into()));
+    }
+    if req.amount == 0 {
+        return Err(GatewayError::BadRequest("amount must be > 0".into()));
+    }
+
+    require_owner(&state, req.asset_id.trim(), &pubkey)?;
+    let mut tapd = state.tapd.clone();
+    let txid = tapd
+        .burn_asset(req.asset_id.trim(), req.amount)
+        .await
+        .map_err(GatewayError::Upstream)?;
+    Ok(Json(TxResponse { txid }))
 }
