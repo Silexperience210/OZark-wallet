@@ -24,6 +24,11 @@ jobs:
       OZARK_DEFAULT_TAPD_HOST: ${{ secrets.OZARK_DEFAULT_TAPD_HOST }}
       OZARK_DEFAULT_TAPD_CERT: ${{ secrets.OZARK_DEFAULT_TAPD_CERT }}
       OZARK_DEFAULT_TAPD_MACAROON: ${{ secrets.OZARK_DEFAULT_TAPD_MACAROON }}
+      # Default OZark gateway onion (custodial method): the app auto-connects the
+      # Vault screen to this, no manual entry. Not a secret in the crypto sense (an
+      # onion is just an endpoint; NIP-98 + per-user isolation are the protection),
+      # but kept out of source. Leave unset to ship with no default gateway.
+      OZARK_DEFAULT_GATEWAY_URL: ${{ secrets.OZARK_DEFAULT_GATEWAY_URL }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4

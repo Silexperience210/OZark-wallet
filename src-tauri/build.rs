@@ -3,7 +3,24 @@ use std::path::PathBuf;
 fn main() {
     compile_protos();
     inject_tapd_defaults();
+    inject_gateway_default();
     tauri_build::build();
+}
+
+/// Inject the default OZark gateway onion URL at compile time from the
+/// `OZARK_DEFAULT_GATEWAY_URL` env var (a repo secret in CI). When set, the Vault
+/// screen auto-connects to it (custodial method) with no manual entry; the user can
+/// still override it in-app. When unset, no default is baked and the user enters
+/// their own gateway. The onion is not a secret (NIP-98 + per-user isolation are the
+/// protection) but is kept out of source.
+fn inject_gateway_default() {
+    println!("cargo:rerun-if-env-changed=OZARK_DEFAULT_GATEWAY_URL");
+    if let Ok(url) = std::env::var("OZARK_DEFAULT_GATEWAY_URL") {
+        let url = url.trim();
+        if !url.is_empty() {
+            println!("cargo:rustc-env=OZARK_DEFAULT_GATEWAY_URL={url}");
+        }
+    }
 }
 
 /// Compile the tapd / Lightning protobuf definitions into Rust gRPC clients.
