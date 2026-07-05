@@ -2,7 +2,7 @@ use std::fs::remove_file;
 use std::path::PathBuf;
 
 use argon2::{Config, ThreadMode, Variant, Version};
-use rand::Rng;
+use rand::{rngs::OsRng, RngCore};
 use tauri::{AppHandle, Manager};
 use tauri_plugin_stronghold::stronghold::Stronghold;
 use zeroize::Zeroizing;
@@ -77,7 +77,7 @@ fn derive_key(password: &str, salt: &[u8]) -> Result<Zeroizing<Vec<u8>>, VaultEr
 
 fn generate_salt() -> Vec<u8> {
     let mut salt = vec![0u8; 16];
-    rand::thread_rng().fill(&mut salt[..]);
+    OsRng.fill_bytes(&mut salt[..]);
     salt
 }
 

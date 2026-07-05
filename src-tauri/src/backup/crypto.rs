@@ -4,7 +4,7 @@ use aes_gcm::{
 };
 use argon2::{Config, ThreadMode, Variant, Version};
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
-use rand::Rng;
+use rand::{rngs::OsRng, RngCore};
 use zeroize::Zeroizing;
 
 const SALT_LEN: usize = 16;
@@ -49,14 +49,14 @@ pub fn derive_key(password: &str, salt: &[u8]) -> Result<Zeroizing<Vec<u8>>, Bac
 /// Returns a base64-encoded string containing: salt + nonce + ciphertext.
 pub fn encrypt(plaintext: &str, password: &str) -> Result<String, BackupError> {
     let mut salt = vec![0u8; SALT_LEN];
-    rand::thread_rng().fill(&mut salt[..]);
+    OsRng.fill_bytes(&mut salt[..]);
 
     let key = derive_key(password, &salt)?;
     let cipher =
         Aes256Gcm::new_from_slice(&key).map_err(|e| BackupError::Encrypt(e.to_string()))?;
 
     let mut nonce_bytes = vec![0u8; NONCE_LEN];
-    rand::thread_rng().fill(&mut nonce_bytes[..]);
+    OsRng.fill_bytes(&mut nonce_bytes[..]);
     let nonce = Nonce::from_slice(&nonce_bytes);
 
     let ciphertext = cipher
