@@ -1,0 +1,6 @@
+# Publish the gateway (gateway:8787 on the compose network) as a v3 onion service.
+# The gateway speaks plain HTTP; Tor provides the encryption and the onion address
+# authenticates the endpoint. No SOCKS proxy is needed for this role.
+SocksPort 0
+HiddenServiceDir /var/lib/tor/ozark-gateway
+HiddenServicePort 80 gateway:8787

@@ -1,0 +1,48 @@
+# Self-hosted OZark gateway + a Tor sidecar that publishes it as an onion service.
+# Run this on the same box as your litd/tapd (e.g. your Umbrel). Nothing is exposed
+# to the host or LAN — only Tor can reach the gateway, on the internal network.
+#
+# Quick start (see DEPLOY.md for detail):
+#   1) cp env.example .env  &&  edit .env  (tapd host)
+#   2) put your litd tls.cert + tapd macaroon in ./secrets/
+#   3) docker compose up -d --build
+#   4) docker compose exec tor cat /var/lib/tor/ozark-gateway/hostname   # -> the onion
+#   5) paste  http://<onion>.onion  into the wallet's Vault screen
+
+services:
+  gateway:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      OZARK_GATEWAY_LISTEN: 0.0.0.0:8787
+      # host:port of your litd/tapd gRPC (e.g. litd on 8443). See DEPLOY.md.
+      OZARK_GATEWAY_TAPD_HOST: ${OZARK_GATEWAY_TAPD_HOST}
+      OZARK_GATEWAY_TAPD_CERT: /secrets/tls.cert
+      OZARK_GATEWAY_TAPD_MACAROON: /secrets/tapd.macaroon
+      OZARK_GATEWAY_DB: /data/ozark-gateway.sqlite
+      # Optional: set to http://<onion>.onion after first boot for strict URL
+      # binding. Left empty, auth still binds each token to its endpoint (path-only).
+      OZARK_GATEWAY_PUBLIC_URL: ${OZARK_GATEWAY_PUBLIC_URL:-}
+    volumes:
+      - ./secrets:/secrets:ro
+      - gateway-data:/data
+    # Optional: attach to your node's docker network so `litd` resolves by name.
+    # networks: [umbrel_main_network]
+
+  tor:
+    image: getumbrel/tor:0.4.7.8
+    restart: unless-stopped
+    volumes:
+      - ./torrc:/etc/tor/torrc:ro
+      - tor-data:/var/lib/tor
+    depends_on:
+      - gateway
+
+volumes:
+  gateway-data:
+  tor-data:
+# networks:
+#   umbrel_main_network:
+#     external: true

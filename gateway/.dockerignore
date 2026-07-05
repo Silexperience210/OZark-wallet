@@ -1,0 +1,6 @@
+/target
+/deploy
+*.sqlite
+*.sqlite-*
+tls.cert
+*.macaroon
