@@ -33,10 +33,16 @@ pub mod universerpc {
     tonic::include_proto!("universerpc");
 }
 
+#[allow(clippy::all, dead_code)]
+pub mod mintrpc {
+    tonic::include_proto!("mintrpc");
+}
+
 type AssetsClient =
     taprpc::taproot_assets_client::TaprootAssetsClient<InterceptedService<Channel, Macaroon>>;
 type UniverseClient =
     universerpc::universe_client::UniverseClient<InterceptedService<Channel, Macaroon>>;
+type MintClient = mintrpc::mint_client::MintClient<InterceptedService<Channel, Macaroon>>;
 
 /// Injects the tapd macaroon into every gRPC request's metadata.
 #[derive(Clone)]
@@ -60,6 +66,7 @@ impl Interceptor for Macaroon {
 pub struct TapdClient {
     assets: AssetsClient,
     universe: UniverseClient,
+    mint: MintClient,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -69,6 +76,24 @@ pub struct AssetInfo {
     pub amount: u64,
     pub asset_type: String,
     pub decimal_display: u32,
+    /// Hex txid of the transaction anchoring this asset. For a freshly minted
+    /// asset this equals its mint batch's txid — the link used to attribute
+    /// ownership at reconciliation time.
+    pub anchor_txid: String,
+}
+
+/// Outcome of a mint: the batch identifiers used to later resolve the asset id.
+#[derive(Debug, Clone, Serialize)]
+pub struct MintOutcome {
+    pub batch_key: String,
+    pub batch_txid: String,
+}
+
+/// A minting batch's identifiers (used to resolve a pending mint's txid).
+#[derive(Debug, Clone)]
+pub struct BatchRef {
+    pub batch_key: String,
+    pub batch_txid: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -125,9 +150,16 @@ impl TapdClient {
             channel.clone(),
             interceptor.clone(),
         );
-        let universe =
-            universerpc::universe_client::UniverseClient::with_interceptor(channel, interceptor);
-        Ok(Self { assets, universe })
+        let universe = universerpc::universe_client::UniverseClient::with_interceptor(
+            channel.clone(),
+            interceptor.clone(),
+        );
+        let mint = mintrpc::mint_client::MintClient::with_interceptor(channel, interceptor);
+        Ok(Self {
+            assets,
+            universe,
+            mint,
+        })
     }
 
     /// All assets known to tapd. The gateway filters this by the ownership
@@ -164,6 +196,15 @@ impl TapdClient {
                         .as_ref()
                         .map(|d| d.decimal_display)
                         .unwrap_or(0),
+                    // AnchorInfo exposes the anchor as `anchor_outpoint` ("txid:vout").
+                    // For a freshly minted asset the anchor is the mint tx, so this
+                    // txid equals the mint batch's txid — the reconciliation link.
+                    anchor_txid: a
+                        .chain_anchor
+                        .as_ref()
+                        .and_then(|c| c.anchor_outpoint.split(':').next())
+                        .unwrap_or_default()
+                        .to_string(),
                 })
             })
             .collect();
@@ -229,6 +270,86 @@ impl TapdClient {
             asset_type,
             amount: a.amount,
         })
+    }
+
+    /// Mint a single asset and finalize its batch (broadcast). Returns the batch
+    /// identifiers; the asset id only exists once the genesis confirms on-chain, so
+    /// ownership is attributed later by matching an asset's `anchor_txid` to
+    /// `batch_txid` (see the reconcile service).
+    pub async fn mint_asset(
+        &mut self,
+        name: &str,
+        amount: u64,
+        metadata: &str,
+        collectible: bool,
+        fee_rate_sat_vb: u32,
+    ) -> Result<MintOutcome, String> {
+        let meta = taprpc::AssetMeta {
+            data: metadata.as_bytes().to_vec(),
+            r#type: taprpc::AssetMetaType::MetaTypeOpaque as i32,
+            meta_hash: vec![],
+        };
+        let amount = if collectible { 1 } else { amount };
+        let asset_type = if collectible {
+            taprpc::AssetType::Collectible
+        } else {
+            taprpc::AssetType::Normal
+        };
+        let asset = mintrpc::MintAsset {
+            asset_version: taprpc::AssetVersion::V0 as i32,
+            asset_type: asset_type as i32,
+            name: name.to_string(),
+            asset_meta: Some(meta),
+            amount,
+            ..Default::default()
+        };
+        self.mint
+            .mint_asset(mintrpc::MintAssetRequest {
+                asset: Some(asset),
+                short_response: true,
+            })
+            .await
+            .map_err(|e| format!("mint_asset: {e}"))?;
+
+        // tapd fee_rate is sat/kw; ~250 sat/kw per sat/vB. 0 lets tapd choose.
+        let batch = self
+            .mint
+            .finalize_batch(mintrpc::FinalizeBatchRequest {
+                fee_rate: fee_rate_sat_vb.saturating_mul(250),
+                ..Default::default()
+            })
+            .await
+            .map_err(|e| format!("finalize_batch: {e}"))?
+            .into_inner()
+            .batch;
+        let batch = batch.ok_or_else(|| "finalize_batch returned no batch".to_string())?;
+        Ok(MintOutcome {
+            batch_key: hex::encode(batch.batch_key),
+            batch_txid: batch.batch_txid,
+        })
+    }
+
+    /// List minting batches, mapping each batch key to its (possibly empty) txid.
+    /// Used to fill in a pending mint's txid before matching it to an asset.
+    pub async fn list_batches(&mut self) -> Result<Vec<BatchRef>, String> {
+        let resp = self
+            .mint
+            .list_batches(mintrpc::ListBatchRequest::default())
+            .await
+            .map_err(|e| format!("list_batches: {e}"))?
+            .into_inner();
+        let out = resp
+            .batches
+            .into_iter()
+            .filter_map(|vb| {
+                let b = vb.batch?;
+                Some(BatchRef {
+                    batch_key: hex::encode(b.batch_key),
+                    batch_txid: b.batch_txid,
+                })
+            })
+            .collect();
+        Ok(out)
     }
 }
 
