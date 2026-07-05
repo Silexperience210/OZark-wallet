@@ -64,6 +64,10 @@ impl TorService {
         // Android stores app data under /data/data/<pkg>/files, which fs-mistrust
         // rejects as "accessible by other users" and aborts bootstrap with a config
         // error. Trust the app's private sandbox so Arti can use its state/cache dirs.
+        // Only Android needs this: its private app sandbox (/data/data/<pkg>) is
+        // flagged by fs-mistrust as "accessible by others". On desktop, keep Arti's
+        // strict filesystem permission checks active.
+        #[cfg(target_os = "android")]
         builder.storage().permissions().dangerously_trust_everyone();
         // Arti rejects .onion targets by default ("allow_onion_addrs disabled");
         // the onion-service-client feature only compiles the code in. Opt in here
