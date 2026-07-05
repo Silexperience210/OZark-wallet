@@ -11,9 +11,7 @@ pub enum GatewayError {
     #[error("unauthorized: {0}")]
     Unauthorized(String),
 
-    /// The caller is authenticated but not the owner of the target asset.
-    // Phase 2: returned when an ownership check fails on send/burn.
-    #[allow(dead_code)]
+    /// The caller is authenticated but not the owner of the target asset/mint.
     #[error("forbidden: {0}")]
     Forbidden(String),
 

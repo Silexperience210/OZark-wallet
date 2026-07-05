@@ -10,6 +10,7 @@
 mod auth;
 mod config;
 mod error;
+mod reconcile;
 mod registry;
 mod routes;
 mod state;

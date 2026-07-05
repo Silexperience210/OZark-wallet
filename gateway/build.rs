@@ -10,6 +10,7 @@ fn main() {
         "proto/tapcommon.proto",
         "proto/taprootassets.proto",
         "proto/universe.proto",
+        "proto/mint.proto",
     ];
     for p in &protos {
         println!("cargo:rerun-if-changed={p}");
