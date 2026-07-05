@@ -4774,7 +4774,7 @@ dependencies = [
 
 [[package]]
 name = "ozark-wallet"
-version = "0.5.1"
+version = "0.5.2"
 dependencies = [
  "aes-gcm",
  "android_logger",
