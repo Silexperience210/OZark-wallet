@@ -48,6 +48,10 @@ log = "0.4"
 arti-client = { version = "0.20", features = ["tokio", "onion-service-client", "rustls"], default-features = false }
 tor-rtcompat = { version = "0.20", default-features = false, features = ["tokio", "rustls"] }
 hyper-util = "0.1"
+# HTTP/1 client for talking to the OZark gateway over the Tor onion (plain HTTP;
+# Tor provides confidentiality and the onion address authenticates the endpoint).
+hyper = { version = "1", features = ["client", "http1"] }
+http-body-util = "0.1"
 http = "1"
 tower-service = "0.3"
 # TLS is done inside the Tor connector: litd/tapd certs are self-signed with
