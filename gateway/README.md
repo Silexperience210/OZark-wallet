@@ -23,33 +23,42 @@ at the root:
 So the node becomes a shared tool: everyone can read/mint, but only the owner of an
 asset can move or destroy it.
 
-## Status — Phases 1–3 (this crate)
+## Status — Phases 1–4 (this crate)
 
-Skeleton + auth + registry + read + mint + owner-gated send/burn. Endpoints:
+Skeleton + auth + **custodial balance ledger** + read + mint + receive + send/burn +
+instant internal transfers. Endpoints:
 
 | Method | Path                  | Auth | Notes |
 |--------|-----------------------|------|-------|
 | GET    | `/health`             | no   | liveness |
-| GET    | `/v1/assets`          | yes  | tapd assets **filtered to the caller's owned asset ids** |
+| GET    | `/v1/assets`          | yes  | the caller's **balances**, enriched with tapd metadata |
+| GET    | `/v1/balance?asset_id=…` | yes | the caller's balance of one asset |
 | GET    | `/v1/universe/stats`  | yes  | global aggregate (not owner-scoped) |
 | GET    | `/v1/universe/roots`  | yes  | global aggregate (not owner-scoped) |
 | GET    | `/v1/decode?addr=…`   | yes  | decode a Taproot Asset address |
-| POST   | `/v1/mint`            | yes  | mint an asset; records the caller as owner (async — see below) |
+| POST   | `/v1/mint`            | yes  | mint an asset; credits the caller on confirmation (async) |
 | GET    | `/v1/mint/status?batch_key=…` | yes | mint progress; owner-gated |
-| POST   | `/v1/send`            | yes  | send an asset out; **owner-gated** (asset id decoded from the address) |
-| POST   | `/v1/burn`            | yes  | burn an asset; **owner-gated** |
+| POST   | `/v1/receive`         | yes  | get a receive address; caller is credited when it confirms |
+| POST   | `/v1/send`            | yes  | send an asset out; **debits the caller** (403 if insufficient) |
+| POST   | `/v1/burn`            | yes  | burn an asset; **debits the caller** |
+| POST   | `/v1/transfer`        | yes  | **instant, free** ledger transfer to another gateway user |
 
-**Ownership gate:** `send`/`burn` require the caller to be the registered owner of
-the asset, else **403**. This is the core isolation guarantee.
+**Balance ledger:** ownership is `(asset_id, pubkey) → amount`. tapd holds the real
+assets; the ledger tracks each user's share. Every mutating action checks and moves
+the caller's balance, so no user can touch another's holdings. `send`/`burn` debit
+first and refund if tapd rejects; an insufficient balance is a **403**.
+
+**Instant transfers:** `/v1/transfer` between two gateway users is a pure ledger
+move — atomic, no on-chain transaction, no fee.
 
 **Async mint:** tapd broadcasts a batch immediately but the asset id only exists
-once the genesis confirms. The gateway holds a pending owner claim keyed by batch
-and resolves it to the asset id by matching an asset's anchor txid to the batch
-txid — reconciliation runs opportunistically on `/v1/assets` and `/v1/mint/status`.
+once the genesis confirms. The gateway holds a pending claim keyed by batch and
+resolves it (crediting the minter) by matching an asset's anchor txid to the batch
+txid. Reconciliation (mints + receives) runs opportunistically on `/v1/assets` and
+`/v1/mint/status`.
 
-Not yet: **receiving** an asset from another gateway user (ownership handoff / a
-multi-owner model), Taproot-assets-over-Lightning, pay-to-mint, and rewiring the app
-to the gateway. See `../.claude` memory `ozark-marketplace` for the full roadmap.
+Not yet: Taproot-assets-over-Lightning, pay-to-mint, and rewiring the app to the
+gateway. See `../.claude` memory `ozark-marketplace` for the full roadmap.
 
 ## Authentication (NIP-98)
 
