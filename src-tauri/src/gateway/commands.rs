@@ -14,15 +14,27 @@ fn config_path(app: &AppHandle) -> Result<PathBuf, String> {
     Ok(WalletState::data_dir(app)?.join("gateway-config.json"))
 }
 
+/// The compile-time default gateway URL (the operator's custodial node), if baked
+/// in via `OZARK_DEFAULT_GATEWAY_URL`. `None` when no default is embedded.
+fn default_gateway_url() -> Option<String> {
+    option_env!("OZARK_DEFAULT_GATEWAY_URL")
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+}
+
 fn read_config(app: &AppHandle) -> Result<Option<GatewayConfig>, String> {
     let path = config_path(app)?;
-    if !path.exists() {
-        return Ok(None);
+    if path.exists() {
+        let json = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
+        let cfg: GatewayConfig = serde_json::from_str(&json).map_err(|e| e.to_string())?;
+        if !cfg.base_url.trim().is_empty() {
+            return Ok(Some(cfg));
+        }
     }
-    let json = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
-    serde_json::from_str(&json)
-        .map(Some)
-        .map_err(|e| e.to_string())
+    // No user-saved config -> fall back to the baked default node (custodial method)
+    // so the Vault screen connects out of the box. The user can still override it.
+    Ok(default_gateway_url().map(|base_url| GatewayConfig { base_url }))
 }
 
 /// Save the gateway onion base URL (e.g. `http://<onion>.onion`).
