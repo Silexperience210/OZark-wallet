@@ -32,6 +32,7 @@ export function UpdateBanner() {
   const { t } = useI18n();
   const [info, setInfo] = useState<{ version: string; url: string } | null>(null);
   const [busy, setBusy] = useState(false);
+  const [note, setNote] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -71,10 +72,18 @@ export function UpdateBanner() {
   async function download() {
     if (!info) return;
     setBusy(true);
+    setNote(null);
     try {
       await openUrl(info.url);
-    } catch {
-      // ignore — the user can still grab it from GitHub Releases manually
+    } catch (e) {
+      // openUrl can fail (permission/scope/no browser handler). Don't fail
+      // silently: copy the link so the user can paste it, and surface why.
+      try {
+        await navigator.clipboard.writeText(info.url);
+        setNote("Ouverture impossible — lien copié, colle-le dans ton navigateur.");
+      } catch {
+        setNote(`Ouverture impossible : ${String(e)}`);
+      }
     } finally {
       setBusy(false);
     }
@@ -90,6 +99,7 @@ export function UpdateBanner() {
       style={{
         display: "flex",
         alignItems: "center",
+        flexWrap: "wrap",
         gap: 10,
         padding: "10px 14px",
         margin: "8px 12px 0",
@@ -115,6 +125,11 @@ export function UpdateBanner() {
       <button className="btn btn-ghost" onClick={dismiss} style={{ padding: 4 }} aria-label="dismiss">
         <X size={16} />
       </button>
+      {note && (
+        <div style={{ flexBasis: "100%", fontSize: 11, opacity: 0.85, wordBreak: "break-all" }}>
+          {note} <span style={{ opacity: 0.7 }}>{info.url}</span>
+        </div>
+      )}
     </div>
   );
 }

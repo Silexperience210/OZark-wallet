@@ -10,6 +10,9 @@
     "deep-link:default",
     "nfc:default",
     "nfc:allow-write",
-    "opener:allow-open-url"
+    {
+      "identifier": "opener:allow-open-url",
+      "allow": [{ "url": "https://*" }]
+    }
   ]
 }
