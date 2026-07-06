@@ -208,6 +208,8 @@ pub fn run() {
             gateway::commands::gateway_history,
             gateway::commands::gateway_asset_meta,
             gateway::commands::gateway_info,
+            gateway::commands::gateway_ln_decode,
+            gateway::commands::gateway_ln_rfq_quotes,
             gateway::commands::gateway_mint,
             gateway::commands::gateway_mint_status,
             gateway::commands::gateway_receive,

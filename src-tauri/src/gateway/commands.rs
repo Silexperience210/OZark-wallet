@@ -121,6 +121,34 @@ pub async fn gateway_info(
     client(&state, &app_handle).await?.get("/v1/info").await
 }
 
+/// Decode a Lightning asset invoice (read-only): asset units + sat equivalent.
+#[command]
+pub async fn gateway_ln_decode(
+    state: State<'_, WalletState>,
+    app_handle: AppHandle,
+    pay_req: String,
+    asset_id: String,
+) -> Result<Value, String> {
+    let path = format!(
+        "/v1/ln/decode?pay_req={}&asset_id={}",
+        pay_req.trim(),
+        asset_id.trim()
+    );
+    client(&state, &app_handle).await?.get(&path).await
+}
+
+/// The node's accepted RFQ quote counts (Lightning-asset routing health signal).
+#[command]
+pub async fn gateway_ln_rfq_quotes(
+    state: State<'_, WalletState>,
+    app_handle: AppHandle,
+) -> Result<Value, String> {
+    client(&state, &app_handle)
+        .await?
+        .get("/v1/ln/rfq-quotes")
+        .await
+}
+
 #[command]
 #[allow(clippy::too_many_arguments)]
 pub async fn gateway_mint(

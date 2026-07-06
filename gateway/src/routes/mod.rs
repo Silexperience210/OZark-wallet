@@ -17,7 +17,10 @@ use crate::error::{GatewayError, GatewayResult};
 use crate::reconcile::reconcile_all;
 use crate::registry::{event_kind, LedgerEvent};
 use crate::state::AppState;
-use crate::tapd::{AssetInfo, AssetMeta, DecodedAddr, NodeInfo, UniverseRoot, UniverseStats};
+use crate::tapd::{
+    AssetInfo, AssetMeta, DecodedAddr, DecodedAssetInvoice, NodeInfo, RfqQuotes, UniverseRoot,
+    UniverseStats,
+};
 
 pub fn router(state: AppState) -> Router {
     Router::new()
@@ -30,6 +33,8 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/decode", get(decode))
         .route("/v1/balance", get(balance))
         .route("/v1/history", get(history))
+        .route("/v1/ln/decode", get(ln_decode))
+        .route("/v1/ln/rfq-quotes", get(ln_rfq_quotes))
         .route("/v1/mint", post(mint))
         .route("/v1/mint/status", get(mint_status))
         .route("/v1/receive", post(receive))
@@ -264,6 +269,54 @@ async fn history(
     let limit = q.limit.unwrap_or(50).clamp(1, 200);
     let events = state.registry.history(&pubkey, limit)?;
     Ok(Json(events))
+}
+
+#[derive(Debug, Deserialize)]
+struct LnDecodeQuery {
+    pay_req: String,
+    asset_id: String,
+}
+
+/// Decode a Lightning **asset** invoice (read-only): asset units + sat equivalent
+/// for a given asset id. Not owner-scoped — decoding leaks nothing about balances.
+async fn ln_decode(
+    State(state): State<AppState>,
+    method: Method,
+    uri: Uri,
+    headers: HeaderMap,
+    Query(q): Query<LnDecodeQuery>,
+) -> GatewayResult<Json<DecodedAssetInvoice>> {
+    auth_get(&state, &headers, &method, &uri)?;
+    let pay_req = q.pay_req.trim();
+    let asset_id = q.asset_id.trim();
+    if pay_req.is_empty() || asset_id.is_empty() {
+        return Err(GatewayError::BadRequest(
+            "pay_req and asset_id are required".into(),
+        ));
+    }
+    let mut tapd = state.tapd.clone();
+    let decoded = tapd
+        .decode_asset_invoice(pay_req, asset_id)
+        .await
+        .map_err(GatewayError::Upstream)?;
+    Ok(Json(decoded))
+}
+
+/// The node's accepted RFQ quote counts (read-only health signal for whether
+/// asset-channel routing is available).
+async fn ln_rfq_quotes(
+    State(state): State<AppState>,
+    method: Method,
+    uri: Uri,
+    headers: HeaderMap,
+) -> GatewayResult<Json<RfqQuotes>> {
+    auth_get(&state, &headers, &method, &uri)?;
+    let mut tapd = state.tapd.clone();
+    let quotes = tapd
+        .list_rfq_quotes()
+        .await
+        .map_err(GatewayError::Upstream)?;
+    Ok(Json(quotes))
 }
 
 #[derive(Debug, Deserialize)]

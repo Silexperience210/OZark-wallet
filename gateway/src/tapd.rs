@@ -38,11 +38,43 @@ pub mod mintrpc {
     tonic::include_proto!("mintrpc");
 }
 
+// Lightning-asset stack (litd): tapchannel + rfq, plus their lnd proto deps.
+// Declared as siblings so the generated cross-package `super::` references
+// (e.g. tapchannelrpc -> lnrpc / rfqrpc / routerrpc / taprpc) resolve.
+#[allow(clippy::all, dead_code)]
+pub mod lnrpc {
+    tonic::include_proto!("lnrpc");
+}
+
+#[allow(clippy::all, dead_code)]
+pub mod routerrpc {
+    tonic::include_proto!("routerrpc");
+}
+
+#[allow(clippy::all, dead_code)]
+pub mod rfqrpc {
+    tonic::include_proto!("rfqrpc");
+}
+
+#[allow(clippy::all, dead_code)]
+pub mod priceoraclerpc {
+    tonic::include_proto!("priceoraclerpc");
+}
+
+#[allow(clippy::all, dead_code)]
+pub mod tapchannelrpc {
+    tonic::include_proto!("tapchannelrpc");
+}
+
 type AssetsClient =
     taprpc::taproot_assets_client::TaprootAssetsClient<InterceptedService<Channel, Macaroon>>;
 type UniverseClient =
     universerpc::universe_client::UniverseClient<InterceptedService<Channel, Macaroon>>;
 type MintClient = mintrpc::mint_client::MintClient<InterceptedService<Channel, Macaroon>>;
+type TapChannelClient = tapchannelrpc::taproot_asset_channels_client::TaprootAssetChannelsClient<
+    InterceptedService<Channel, Macaroon>,
+>;
+type RfqClient = rfqrpc::rfq_client::RfqClient<InterceptedService<Channel, Macaroon>>;
 
 /// Injects the tapd macaroon into every gRPC request's metadata.
 #[derive(Clone)]
@@ -67,6 +99,8 @@ pub struct TapdClient {
     assets: AssetsClient,
     universe: UniverseClient,
     mint: MintClient,
+    tapchannel: TapChannelClient,
+    rfq: RfqClient,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -145,6 +179,24 @@ pub struct NodeInfo {
     pub network: String,
 }
 
+/// A decoded Lightning asset invoice (RFQ-priced): the asset units it settles and
+/// the sat equivalent, plus the human description.
+#[derive(Debug, Clone, Serialize)]
+pub struct DecodedAssetInvoice {
+    pub asset_amount: u64,
+    pub sat_amount: i64,
+    pub description: String,
+    pub destination: String,
+}
+
+/// Count of the node's currently-accepted RFQ quotes (buy/sell), a cheap health
+/// signal for whether asset-channel routing is available.
+#[derive(Debug, Clone, Serialize)]
+pub struct RfqQuotes {
+    pub buy_quotes: usize,
+    pub sell_quotes: usize,
+}
+
 impl TapdClient {
     /// Connect to a local tapd. `host` is `host:port`; `cert_pem` is tapd's TLS
     /// certificate (PEM); `macaroon_hex` authorizes the gRPC calls.
@@ -181,11 +233,22 @@ impl TapdClient {
             channel.clone(),
             interceptor.clone(),
         );
-        let mint = mintrpc::mint_client::MintClient::with_interceptor(channel, interceptor);
+        let mint = mintrpc::mint_client::MintClient::with_interceptor(
+            channel.clone(),
+            interceptor.clone(),
+        );
+        let tapchannel =
+            tapchannelrpc::taproot_asset_channels_client::TaprootAssetChannelsClient::with_interceptor(
+                channel.clone(),
+                interceptor.clone(),
+            );
+        let rfq = rfqrpc::rfq_client::RfqClient::with_interceptor(channel, interceptor);
         Ok(Self {
             assets,
             universe,
             mint,
+            tapchannel,
+            rfq,
         })
     }
 
@@ -337,6 +400,51 @@ impl TapdClient {
             version: i.version,
             lnd_version: i.lnd_version,
             network: i.network,
+        })
+    }
+
+    /// Decode a Lightning **asset** invoice: how many asset units it settles (given
+    /// the asset id) and the sat equivalent. Read-only — no ledger effect.
+    pub async fn decode_asset_invoice(
+        &mut self,
+        pay_req: &str,
+        asset_id: &str,
+    ) -> Result<DecodedAssetInvoice, String> {
+        let asset_id = hex::decode(asset_id).map_err(|e| format!("invalid asset id: {e}"))?;
+        let req = tapchannelrpc::AssetPayReq {
+            asset_id,
+            pay_req_string: pay_req.to_string(),
+            ..Default::default()
+        };
+        let resp = self
+            .tapchannel
+            .decode_asset_pay_req(req)
+            .await
+            .map_err(|e| format!("decode_asset_pay_req: {e}"))?
+            .into_inner();
+        let (sat_amount, description, destination) = resp
+            .pay_req
+            .map(|p| (p.num_satoshis, p.description, p.destination))
+            .unwrap_or_default();
+        Ok(DecodedAssetInvoice {
+            asset_amount: resp.asset_amount,
+            sat_amount,
+            description,
+            destination,
+        })
+    }
+
+    /// The node's currently-accepted RFQ quote counts (buy/sell). Read-only.
+    pub async fn list_rfq_quotes(&mut self) -> Result<RfqQuotes, String> {
+        let resp = self
+            .rfq
+            .query_peer_accepted_quotes(rfqrpc::QueryPeerAcceptedQuotesRequest::default())
+            .await
+            .map_err(|e| format!("query_peer_accepted_quotes: {e}"))?
+            .into_inner();
+        Ok(RfqQuotes {
+            buy_quotes: resp.buy_quotes.len(),
+            sell_quotes: resp.sell_quotes.len(),
         })
     }
 
