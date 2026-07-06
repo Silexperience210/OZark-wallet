@@ -4787,6 +4787,8 @@ dependencies = [
  "bitcoin",
  "hex",
  "http",
+ "http-body-util",
+ "hyper",
  "hyper-util",
  "iota_stronghold",
  "log",

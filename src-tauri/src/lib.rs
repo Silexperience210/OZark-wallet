@@ -2,6 +2,7 @@ mod ark;
 mod backup;
 mod commands;
 mod gateway;
+mod kdf;
 // `pub` so the not-yet-wired bonding-curve math counts as public API and does
 // not trip clippy's `dead_code` under `-D warnings`. Made private once the desk
 // commands consume it.
