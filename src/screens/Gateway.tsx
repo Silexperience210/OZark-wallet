@@ -75,6 +75,18 @@ interface LedgerEvent {
   created_at: number;
 }
 
+interface RfqQuotes {
+  buy_quotes: number;
+  sell_quotes: number;
+}
+
+interface DecodedAssetInvoice {
+  asset_amount: number;
+  sat_amount: number;
+  description: string;
+  destination: string;
+}
+
 const card: CSSProperties = { padding: 18, marginBottom: 14 };
 const label: CSSProperties = { fontSize: 12, fontWeight: 600, marginBottom: 6, display: "block" };
 const row: CSSProperties = { display: "flex", gap: 8, marginBottom: 8 };
@@ -125,6 +137,12 @@ export function Gateway({ onBack }: GatewayProps) {
 
   // Transaction history (per-user ledger)
   const [history, setHistory] = useState<LedgerEvent[]>([]);
+
+  // Lightning assets (read-only: RFQ health + invoice decode)
+  const [rfq, setRfq] = useState<RfqQuotes | null>(null);
+  const [lnPayReq, setLnPayReq] = useState("");
+  const [lnAssetId, setLnAssetId] = useState("");
+  const [lnDecoded, setLnDecoded] = useState<DecodedAssetInvoice | null>(null);
 
   // Mint
   const [mintName, setMintName] = useState("");
@@ -194,6 +212,11 @@ export function Gateway({ onBack }: GatewayProps) {
       } catch {
         setHistory([]);
       }
+      try {
+        setRfq(await invoke<RfqQuotes>("gateway_ln_rfq_quotes"));
+      } catch {
+        setRfq(null);
+      }
     } catch (e) {
       notify(String(e), "error");
     } finally {
@@ -218,6 +241,25 @@ export function Gateway({ onBack }: GatewayProps) {
       setMetaFor(null);
     } finally {
       setMetaLoading(false);
+    }
+  };
+
+  const doLnDecode = async () => {
+    if (!lnPayReq.trim() || !lnAssetId.trim())
+      return notify("Facture et asset id requis", "error");
+    setBusy(true);
+    setLnDecoded(null);
+    try {
+      setLnDecoded(
+        await invoke<DecodedAssetInvoice>("gateway_ln_decode", {
+          payReq: lnPayReq.trim(),
+          assetId: lnAssetId.trim(),
+        }),
+      );
+    } catch (e) {
+      notify(String(e), "error");
+    } finally {
+      setBusy(false);
     }
   };
 
@@ -773,6 +815,67 @@ export function Gateway({ onBack }: GatewayProps) {
                 {busy ? <span className="spinner" /> : null} Brûler définitivement
               </button>
             </div>
+          </div>
+
+          {/* Lightning assets (read-only) */}
+          <div className="glass-card" style={card}>
+            <strong>⚡ Lightning Assets</strong>
+            <p className="text-muted" style={{ fontSize: 11, marginTop: 4, marginBottom: 10 }}>
+              {rfq
+                ? `RFQ : ${rfq.buy_quotes} devis d'achat · ${rfq.sell_quotes} de vente`
+                : "RFQ indisponible (aucun canal d'asset ?)."}
+            </p>
+            <input
+              className="input"
+              style={{ width: "100%", marginBottom: 8 }}
+              placeholder="Facture Lightning (lnbc…)"
+              value={lnPayReq}
+              onChange={(e) => setLnPayReq(e.target.value)}
+            />
+            <div style={row}>
+              <input
+                className="input"
+                style={{ flex: 2 }}
+                placeholder="Asset ID (hex)"
+                value={lnAssetId}
+                onChange={(e) => setLnAssetId(e.target.value)}
+              />
+              <button className="btn btn-ghost" onClick={doLnDecode} disabled={busy}>
+                {busy ? <span className="spinner" /> : null} Décoder
+              </button>
+            </div>
+            {lnDecoded && (
+              <div
+                style={{
+                  marginTop: 8,
+                  paddingTop: 8,
+                  borderTop: "1px solid rgba(255,255,255,0.06)",
+                  fontSize: 12,
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: 3,
+                }}
+              >
+                <div>
+                  <span className="text-muted">Montant asset : </span>
+                  {lnDecoded.asset_amount.toLocaleString()}
+                </div>
+                <div>
+                  <span className="text-muted">≈ sats : </span>
+                  {lnDecoded.sat_amount.toLocaleString()}
+                </div>
+                {lnDecoded.description && (
+                  <div>
+                    <span className="text-muted">Note : </span>
+                    {lnDecoded.description}
+                  </div>
+                )}
+              </div>
+            )}
+            <p className="text-muted" style={{ fontSize: 10, marginTop: 8 }}>
+              Lecture seule pour l'instant (décodage + état RFQ). Payer/recevoir en LN arrive
+              ensuite.
+            </p>
           </div>
         </>
       )}
