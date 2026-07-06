@@ -130,6 +130,7 @@ pub async fn gateway_mint(
     amount: u64,
     meta: Option<String>,
     collectible: Option<bool>,
+    grouped: Option<bool>,
     fee_rate_sat_vb: Option<u32>,
 ) -> Result<Value, String> {
     let body = json!({
@@ -137,6 +138,7 @@ pub async fn gateway_mint(
         "amount": amount,
         "meta": meta,
         "collectible": collectible,
+        "grouped": grouped,
         "fee_rate_sat_vb": fee_rate_sat_vb,
     });
     client(&state, &app_handle)

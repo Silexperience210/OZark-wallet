@@ -131,6 +131,7 @@ export function Gateway({ onBack }: GatewayProps) {
   const [mintAmount, setMintAmount] = useState("");
   const [mintMeta, setMintMeta] = useState("");
   const [mintCollectible, setMintCollectible] = useState(false);
+  const [mintGrouped, setMintGrouped] = useState(false);
   const [mintFee, setMintFee] = useState("");
   const [lastBatch, setLastBatch] = useState("");
   const [mintStatus, setMintStatus] = useState<string>("");
@@ -230,6 +231,7 @@ export function Gateway({ onBack }: GatewayProps) {
         amount: num(mintAmount),
         meta: mintMeta.trim() || null,
         collectible: mintCollectible,
+        grouped: mintGrouped,
         feeRateSatVb: mintFee ? num(mintFee) : null,
       });
       setLastBatch(r.batch_key);
@@ -577,7 +579,7 @@ export function Gateway({ onBack }: GatewayProps) {
                 value={mintMeta}
                 onChange={(e) => setMintMeta(e.target.value)}
               />
-              <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, marginBottom: 10 }}>
+              <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, marginBottom: 6 }}>
                 <input
                   type="checkbox"
                   checked={mintCollectible}
@@ -585,6 +587,17 @@ export function Gateway({ onBack }: GatewayProps) {
                 />
                 Collectible (pièce unique)
               </label>
+              <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, marginBottom: 2 }}>
+                <input
+                  type="checkbox"
+                  checked={mintGrouped}
+                  onChange={(e) => setMintGrouped(e.target.checked)}
+                />
+                Groupé (réémetable plus tard)
+              </label>
+              <p className="text-muted" style={{ fontSize: 10, marginBottom: 10 }}>
+                Émet une clé de groupe pour pouvoir ré-émettre cet asset ensuite. Sinon = offre figée.
+              </p>
               <input
                 className="input"
                 style={{ width: "100%", marginBottom: 4 }}

@@ -276,6 +276,8 @@ struct MintRequest {
     #[serde(default)]
     collectible: Option<bool>,
     #[serde(default)]
+    grouped: Option<bool>,
+    #[serde(default)]
     fee_rate_sat_vb: Option<u32>,
 }
 
@@ -318,6 +320,7 @@ async fn mint(
             amount,
             req.meta.as_deref().unwrap_or(""),
             collectible,
+            req.grouped.unwrap_or(false),
             req.fee_rate_sat_vb.unwrap_or(0),
         )
         .await
