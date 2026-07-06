@@ -15,6 +15,7 @@ use serde::{Deserialize, Serialize};
 use crate::auth::{authenticate, now_secs};
 use crate::error::{GatewayError, GatewayResult};
 use crate::reconcile::reconcile_all;
+use crate::registry::{event_kind, LedgerEvent};
 use crate::state::AppState;
 use crate::tapd::{AssetInfo, AssetMeta, DecodedAddr, NodeInfo, UniverseRoot, UniverseStats};
 
@@ -28,6 +29,7 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/info", get(node_info))
         .route("/v1/decode", get(decode))
         .route("/v1/balance", get(balance))
+        .route("/v1/history", get(history))
         .route("/v1/mint", post(mint))
         .route("/v1/mint/status", get(mint_status))
         .route("/v1/receive", post(receive))
@@ -241,6 +243,27 @@ async fn balance(
         asset_id: asset_id.to_string(),
         amount,
     }))
+}
+
+#[derive(Debug, Deserialize)]
+struct HistoryQuery {
+    limit: Option<u32>,
+}
+
+/// The caller's transaction history (mint/receive/send/burn/transfers), newest
+/// first. Owner-scoped from the ledger — never the node-global transfer list, so
+/// no other user's activity is exposed.
+async fn history(
+    State(state): State<AppState>,
+    method: Method,
+    uri: Uri,
+    headers: HeaderMap,
+    Query(q): Query<HistoryQuery>,
+) -> GatewayResult<Json<Vec<LedgerEvent>>> {
+    let pubkey = auth_get(&state, &headers, &method, &uri)?;
+    let limit = q.limit.unwrap_or(50).clamp(1, 200);
+    let events = state.registry.history(&pubkey, limit)?;
+    Ok(Json(events))
 }
 
 #[derive(Debug, Deserialize)]
@@ -461,7 +484,20 @@ async fn send(
         .send_asset(req.addr.trim(), req.fee_rate_sat_vb.unwrap_or(0))
         .await
     {
-        Ok(txid) => Ok(Json(TxResponse { txid })),
+        Ok(txid) => {
+            // Best-effort history: the balance already moved; a failed record must
+            // not fail the send.
+            let _ = state.registry.record_event(
+                &pubkey,
+                &decoded.asset_id,
+                event_kind::SEND,
+                decoded.amount,
+                Some(req.addr.trim()),
+                Some(&txid),
+                now_secs() as i64,
+            );
+            Ok(Json(TxResponse { txid }))
+        }
         Err(e) => {
             // Refund the reservation so a failed send never loses funds.
             let _ = state
@@ -502,7 +538,18 @@ async fn burn(
 
     let mut tapd = state.tapd.clone();
     match tapd.burn_asset(asset_id, req.amount).await {
-        Ok(txid) => Ok(Json(TxResponse { txid })),
+        Ok(txid) => {
+            let _ = state.registry.record_event(
+                &pubkey,
+                asset_id,
+                event_kind::BURN,
+                req.amount,
+                None,
+                Some(&txid),
+                now_secs() as i64,
+            );
+            Ok(Json(TxResponse { txid }))
+        }
         Err(e) => {
             let _ = state.registry.credit(asset_id, &pubkey, req.amount);
             Err(GatewayError::Upstream(e))

@@ -205,6 +205,7 @@ pub fn run() {
             gateway::commands::load_gateway_config,
             gateway::commands::gateway_list_assets,
             gateway::commands::gateway_balance,
+            gateway::commands::gateway_history,
             gateway::commands::gateway_asset_meta,
             gateway::commands::gateway_info,
             gateway::commands::gateway_mint,

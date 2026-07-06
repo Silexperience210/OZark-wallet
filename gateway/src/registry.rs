@@ -16,6 +16,18 @@ use std::path::Path;
 use std::sync::Mutex;
 
 use rusqlite::{Connection, OptionalExtension};
+use serde::Serialize;
+
+/// The kinds of balance-affecting events recorded in the per-user history.
+/// Direction is implied by the kind; `amount` is always positive.
+pub mod event_kind {
+    pub const MINT: &str = "mint";
+    pub const RECEIVE: &str = "receive";
+    pub const SEND: &str = "send";
+    pub const BURN: &str = "burn";
+    pub const TRANSFER_IN: &str = "transfer_in";
+    pub const TRANSFER_OUT: &str = "transfer_out";
+}
 
 pub struct Registry {
     // rusqlite's Connection is !Sync; serialize access behind a mutex. The gateway
@@ -54,6 +66,25 @@ pub struct PendingReceive {
     pub asset_id: String,
     pub pubkey: String,
     pub amount: u64,
+}
+
+/// One entry in a user's transaction history — the custodial analog of tapd's
+/// node-global transfer list, but scoped to a single user via the ledger. Every
+/// balance-affecting action appends one (transfers append two: out + in).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct LedgerEvent {
+    pub id: i64,
+    pub asset_id: String,
+    /// One of [`event_kind`].
+    pub kind: String,
+    pub amount: u64,
+    /// The other party where meaningful: recipient/sender pubkey for transfers,
+    /// the destination address for a send/receive. `None` for mint/burn.
+    pub counterparty: Option<String>,
+    /// A reference to the underlying action: on-chain txid (send/burn), receive
+    /// address, or mint batch key. `None` for internal transfers.
+    pub reference: Option<String>,
+    pub created_at: i64,
 }
 
 impl Registry {
@@ -106,7 +137,22 @@ impl Registry {
                  pubkey     TEXT NOT NULL,
                  amount     INTEGER NOT NULL,
                  created_at INTEGER NOT NULL
-             );",
+             );
+             -- Per-user transaction history. Append-only; one row per balance move
+             -- (transfers append two: transfer_out for the sender, transfer_in for
+             -- the recipient). Ordered by `id` so display order matches insertion
+             -- regardless of clock skew between event timestamps.
+             CREATE TABLE IF NOT EXISTS ledger_events (
+                 id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                 pubkey       TEXT NOT NULL,
+                 asset_id     TEXT NOT NULL,
+                 kind         TEXT NOT NULL,
+                 amount       INTEGER NOT NULL,
+                 counterparty TEXT,
+                 reference    TEXT,
+                 created_at   INTEGER NOT NULL
+             );
+             CREATE INDEX IF NOT EXISTS idx_events_pubkey ON ledger_events(pubkey, id DESC);",
         )?;
         Ok(Self {
             conn: Mutex::new(conn),
@@ -162,10 +208,31 @@ impl Registry {
         to: &str,
         amount: u64,
     ) -> Result<(), RegistryError> {
+        let now = crate::auth::now_secs() as i64;
         let mut conn = self.lock();
         let tx = conn.transaction()?;
         debit_conn(&tx, asset_id, from, amount)?;
         credit_conn(&tx, asset_id, to, amount)?;
+        record_event_conn(
+            &tx,
+            from,
+            asset_id,
+            event_kind::TRANSFER_OUT,
+            amount,
+            Some(to),
+            None,
+            now,
+        )?;
+        record_event_conn(
+            &tx,
+            to,
+            asset_id,
+            event_kind::TRANSFER_IN,
+            amount,
+            Some(from),
+            None,
+            now,
+        )?;
         tx.commit()?;
         Ok(())
     }
@@ -271,7 +338,18 @@ impl Registry {
         let Some((owner, amount)) = row else {
             return Ok(false);
         };
-        credit_conn(&tx, asset_id, &owner, amount.max(0) as u64)?;
+        let credited = amount.max(0) as u64;
+        credit_conn(&tx, asset_id, &owner, credited)?;
+        record_event_conn(
+            &tx,
+            &owner,
+            asset_id,
+            event_kind::MINT,
+            credited,
+            None,
+            Some(batch_key),
+            created_at,
+        )?;
         tx.execute(
             "INSERT OR IGNORE INTO mints (batch_key, asset_id, owner_pubkey, created_at)
              VALUES (?1, ?2, ?3, ?4)",
@@ -351,10 +429,73 @@ impl Registry {
         let Some((asset_id, pubkey, amount)) = row else {
             return Ok(false);
         };
-        credit_conn(&tx, &asset_id, &pubkey, amount.max(0) as u64)?;
+        let credited = amount.max(0) as u64;
+        credit_conn(&tx, &asset_id, &pubkey, credited)?;
+        record_event_conn(
+            &tx,
+            &pubkey,
+            &asset_id,
+            event_kind::RECEIVE,
+            credited,
+            Some(addr),
+            Some(addr),
+            crate::auth::now_secs() as i64,
+        )?;
         tx.execute("DELETE FROM pending_receives WHERE addr = ?1", [addr])?;
         tx.commit()?;
         Ok(true)
+    }
+
+    // ---- History ----------------------------------------------------------
+
+    /// Append a history event for `pubkey`. Used by the route layer for actions
+    /// whose ledger move is not a single transaction (send/burn: debit, then tapd
+    /// call, then record on success). Best-effort — the caller ignores failures so
+    /// a history write never fails the underlying action.
+    #[allow(clippy::too_many_arguments)]
+    pub fn record_event(
+        &self,
+        pubkey: &str,
+        asset_id: &str,
+        kind: &str,
+        amount: u64,
+        counterparty: Option<&str>,
+        reference: Option<&str>,
+        created_at: i64,
+    ) -> Result<(), RegistryError> {
+        let conn = self.lock();
+        record_event_conn(
+            &conn,
+            pubkey,
+            asset_id,
+            kind,
+            amount,
+            counterparty,
+            reference,
+            created_at,
+        )
+    }
+
+    /// The caller's most recent history events, newest first, capped at `limit`.
+    pub fn history(&self, pubkey: &str, limit: u32) -> Result<Vec<LedgerEvent>, RegistryError> {
+        let conn = self.lock();
+        let mut stmt = conn.prepare(
+            "SELECT id, asset_id, kind, amount, counterparty, reference, created_at
+             FROM ledger_events WHERE pubkey = ?1 ORDER BY id DESC LIMIT ?2",
+        )?;
+        let rows = stmt.query_map((pubkey, limit), |r| {
+            Ok(LedgerEvent {
+                id: r.get(0)?,
+                asset_id: r.get(1)?,
+                kind: r.get(2)?,
+                amount: r.get::<_, i64>(3)? as u64,
+                counterparty: r.get(4)?,
+                reference: r.get(5)?,
+                created_at: r.get(6)?,
+            })
+        })?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(Into::into)
     }
 }
 
@@ -410,6 +551,34 @@ fn debit_conn(
     conn.execute(
         "UPDATE balances SET amount = amount - ?3 WHERE asset_id = ?1 AND pubkey = ?2",
         (asset_id, pubkey, amount as i64),
+    )?;
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn record_event_conn(
+    conn: &Connection,
+    pubkey: &str,
+    asset_id: &str,
+    kind: &str,
+    amount: u64,
+    counterparty: Option<&str>,
+    reference: Option<&str>,
+    created_at: i64,
+) -> Result<(), RegistryError> {
+    conn.execute(
+        "INSERT INTO ledger_events
+             (pubkey, asset_id, kind, amount, counterparty, reference, created_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        (
+            pubkey,
+            asset_id,
+            kind,
+            amount as i64,
+            counterparty,
+            reference,
+            created_at,
+        ),
     )?;
     Ok(())
 }
@@ -528,5 +697,70 @@ mod tests {
         // Resolving again is a no-op (idempotent — pending row is gone).
         assert!(!r.resolve_receive("taddr1").unwrap());
         assert_eq!(r.balance_of("X", BOB).unwrap(), 250);
+    }
+
+    #[test]
+    fn history_records_mint_receive_and_transfer_both_sides() {
+        let r = reg();
+        // mint 1000 to ALICE
+        r.add_pending_mint("b1", "", ALICE, "OZK", 1000, 10)
+            .unwrap();
+        r.resolve_pending_mint("b1", "assetA", 20).unwrap();
+        // receive 50 to ALICE
+        r.add_pending_receive("addr1", "assetA", ALICE, 50, 5)
+            .unwrap();
+        r.resolve_receive("addr1").unwrap();
+        // internal transfer 30 ALICE -> BOB
+        r.transfer("assetA", ALICE, BOB, 30).unwrap();
+
+        // ALICE sees newest-first: transfer_out, receive, mint.
+        let alice: Vec<String> = r
+            .history(ALICE, 50)
+            .unwrap()
+            .into_iter()
+            .map(|e| e.kind)
+            .collect();
+        assert_eq!(alice, vec!["transfer_out", "receive", "mint"]);
+
+        // BOB sees only the incoming transfer, with ALICE as counterparty.
+        let bob = r.history(BOB, 50).unwrap();
+        assert_eq!(bob.len(), 1);
+        assert_eq!(bob[0].kind, event_kind::TRANSFER_IN);
+        assert_eq!(bob[0].amount, 30);
+        assert_eq!(bob[0].asset_id, "assetA");
+        assert_eq!(bob[0].counterparty.as_deref(), Some(ALICE));
+
+        // The mint event carries its batch key as the reference.
+        let mint = r
+            .history(ALICE, 50)
+            .unwrap()
+            .into_iter()
+            .find(|e| e.kind == event_kind::MINT)
+            .unwrap();
+        assert_eq!(mint.amount, 1000);
+        assert_eq!(mint.reference.as_deref(), Some("b1"));
+    }
+
+    #[test]
+    fn record_event_direct_and_limit() {
+        let r = reg();
+        for i in 0..5u64 {
+            r.record_event(
+                ALICE,
+                "X",
+                event_kind::SEND,
+                i + 1,
+                None,
+                Some("txid"),
+                i as i64,
+            )
+            .unwrap();
+        }
+        assert_eq!(r.history(ALICE, 50).unwrap().len(), 5);
+        let two = r.history(ALICE, 2).unwrap();
+        assert_eq!(two.len(), 2);
+        // Newest first: last inserted (amount 5) then (amount 4).
+        assert_eq!(two[0].amount, 5);
+        assert_eq!(two[1].amount, 4);
     }
 }
