@@ -1,6 +1,6 @@
 [package]
 name = "ozark-wallet"
-version = "0.5.7"
+version = "0.5.8"
 description = "OZark Wallet - Bitcoin ARK Layer 2"
 authors = ["OZark"]
 edition = "2021"
