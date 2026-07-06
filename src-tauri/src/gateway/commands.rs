@@ -90,6 +90,26 @@ pub async fn gateway_balance(
     client(&state, &app_handle).await?.get(&path).await
 }
 
+/// Public metadata (name/ticker blob, decimals) for one asset.
+#[command]
+pub async fn gateway_asset_meta(
+    state: State<'_, WalletState>,
+    app_handle: AppHandle,
+    asset_id: String,
+) -> Result<Value, String> {
+    let path = format!("/v1/asset/meta?asset_id={}", asset_id.trim());
+    client(&state, &app_handle).await?.get(&path).await
+}
+
+/// Gateway node info (tapd version + network) — for a status panel.
+#[command]
+pub async fn gateway_info(
+    state: State<'_, WalletState>,
+    app_handle: AppHandle,
+) -> Result<Value, String> {
+    client(&state, &app_handle).await?.get("/v1/info").await
+}
+
 #[command]
 #[allow(clippy::too_many_arguments)]
 pub async fn gateway_mint(

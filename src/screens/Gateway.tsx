@@ -11,6 +11,7 @@ import {
   ArrowLeftRight,
   Copy,
   Check,
+  Info,
 } from "lucide-react";
 import { useNotification } from "../contexts/NotificationContext";
 
@@ -50,6 +51,19 @@ interface GatewayConfig {
   base_url: string;
 }
 
+interface AssetMeta {
+  data: string;
+  meta_type: string;
+  meta_hash: string;
+  decimal_display: number;
+}
+
+interface NodeInfo {
+  version: string;
+  lnd_version: string;
+  network: string;
+}
+
 const card: CSSProperties = { padding: 18, marginBottom: 14 };
 const label: CSSProperties = { fontSize: 12, fontWeight: 600, marginBottom: 6, display: "block" };
 const row: CSSProperties = { display: "flex", gap: 8, marginBottom: 8 };
@@ -70,6 +84,12 @@ export function Gateway({ onBack }: GatewayProps) {
 
   const [assets, setAssets] = useState<HeldAsset[]>([]);
   const [loading, setLoading] = useState(false);
+
+  // Node info + per-asset metadata (read-only)
+  const [nodeInfo, setNodeInfo] = useState<NodeInfo | null>(null);
+  const [metaFor, setMetaFor] = useState<string | null>(null);
+  const [meta, setMeta] = useState<AssetMeta | null>(null);
+  const [metaLoading, setMetaLoading] = useState(false);
 
   // Mint
   const [mintName, setMintName] = useState("");
@@ -126,10 +146,36 @@ export function Gateway({ onBack }: GatewayProps) {
     try {
       const a = await invoke<HeldAsset[]>("gateway_list_assets");
       setAssets(a);
+      // Node info is best-effort: a failure here must not hide balances.
+      try {
+        setNodeInfo(await invoke<NodeInfo>("gateway_info"));
+      } catch {
+        setNodeInfo(null);
+      }
     } catch (e) {
       notify(String(e), "error");
     } finally {
       setLoading(false);
+    }
+  };
+
+  // Toggle the metadata panel for one asset, fetching it on first open.
+  const toggleMeta = async (assetId: string) => {
+    if (metaFor === assetId) {
+      setMetaFor(null);
+      setMeta(null);
+      return;
+    }
+    setMetaFor(assetId);
+    setMeta(null);
+    setMetaLoading(true);
+    try {
+      setMeta(await invoke<AssetMeta>("gateway_asset_meta", { assetId }));
+    } catch (e) {
+      notify(String(e), "error");
+      setMetaFor(null);
+    } finally {
+      setMetaLoading(false);
     }
   };
 
@@ -317,6 +363,12 @@ export function Gateway({ onBack }: GatewayProps) {
                 {loading ? <span className="spinner" /> : <RefreshCw size={16} />} Actualiser
               </button>
             </div>
+            {nodeInfo && (
+              <p className="text-muted" style={{ fontSize: 11, marginBottom: 10 }}>
+                <Server size={11} style={{ verticalAlign: "-1px", marginRight: 4 }} />
+                tapd {nodeInfo.version || "?"} · {nodeInfo.network || "?"}
+              </p>
+            )}
             {assets.length === 0 ? (
               <p className="text-muted" style={{ fontSize: 12 }}>
                 Aucun solde. Mint ou reçois un asset ci-dessous.
@@ -327,21 +379,74 @@ export function Gateway({ onBack }: GatewayProps) {
                   <div
                     key={a.asset_id}
                     style={{
-                      display: "flex",
-                      justifyContent: "space-between",
-                      alignItems: "center",
                       background: "rgba(255,255,255,0.03)",
                       borderRadius: 10,
                       padding: "10px 12px",
                     }}
                   >
-                    <div>
-                      <div style={{ fontWeight: 600, fontSize: 14 }}>{a.name || "(sans nom)"}</div>
-                      <div className="text-muted" style={{ fontSize: 11, fontFamily: "monospace" }}>
-                        {short(a.asset_id)}
+                    <div
+                      style={{
+                        display: "flex",
+                        justifyContent: "space-between",
+                        alignItems: "center",
+                      }}
+                    >
+                      <div>
+                        <div style={{ fontWeight: 600, fontSize: 14 }}>{a.name || "(sans nom)"}</div>
+                        <div className="text-muted" style={{ fontSize: 11, fontFamily: "monospace" }}>
+                          {short(a.asset_id)}
+                        </div>
+                      </div>
+                      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                        <div style={{ fontWeight: 700, fontSize: 16 }}>{a.amount.toLocaleString()}</div>
+                        <button
+                          className="btn btn-ghost"
+                          style={{ padding: 6 }}
+                          title="Détails de l'asset"
+                          onClick={() => toggleMeta(a.asset_id)}
+                        >
+                          <Info size={15} />
+                        </button>
                       </div>
                     </div>
-                    <div style={{ fontWeight: 700, fontSize: 16 }}>{a.amount.toLocaleString()}</div>
+                    {metaFor === a.asset_id && (
+                      <div
+                        style={{
+                          marginTop: 8,
+                          paddingTop: 8,
+                          borderTop: "1px solid rgba(255,255,255,0.06)",
+                          fontSize: 11,
+                        }}
+                      >
+                        {metaLoading ? (
+                          <span className="text-muted">
+                            <span className="spinner" /> Chargement…
+                          </span>
+                        ) : meta ? (
+                          <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                            <div>
+                              <span className="text-muted">Décimales : </span>
+                              {meta.decimal_display}
+                            </div>
+                            <div>
+                              <span className="text-muted">Type méta : </span>
+                              {meta.meta_type}
+                            </div>
+                            {meta.data && (
+                              <div style={{ wordBreak: "break-word" }}>
+                                <span className="text-muted">Méta : </span>
+                                {meta.data.length > 200 ? `${meta.data.slice(0, 200)}…` : meta.data}
+                              </div>
+                            )}
+                            <div className="text-muted" style={{ fontFamily: "monospace" }}>
+                              hash {short(meta.meta_hash)}
+                            </div>
+                          </div>
+                        ) : (
+                          <span className="text-muted">Aucune métadonnée.</span>
+                        )}
+                      </div>
+                    )}
                   </div>
                 ))}
               </div>

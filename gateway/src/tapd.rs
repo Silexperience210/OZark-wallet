@@ -126,6 +126,25 @@ pub struct DecodedAddr {
     pub amount: u64,
 }
 
+/// Public metadata for one asset (safe to expose: it is the asset's own genesis
+/// metadata, not any user's holdings).
+#[derive(Debug, Clone, Serialize)]
+pub struct AssetMeta {
+    /// UTF-8 lossy view of the raw meta blob (issuer-provided).
+    pub data: String,
+    pub meta_type: String,
+    pub meta_hash: String,
+    pub decimal_display: u32,
+}
+
+/// Non-sensitive node information (version + network), for a status panel.
+#[derive(Debug, Clone, Serialize)]
+pub struct NodeInfo {
+    pub version: String,
+    pub lnd_version: String,
+    pub network: String,
+}
+
 impl TapdClient {
     /// Connect to a local tapd. `host` is `host:port`; `cert_pem` is tapd's TLS
     /// certificate (PEM); `macaroon_hex` authorizes the gRPC calls.
@@ -277,6 +296,47 @@ impl TapdClient {
             asset_id: hex::encode(a.asset_id),
             asset_type,
             amount: a.amount,
+        })
+    }
+
+    /// Public metadata for a single asset, keyed by its hex asset id.
+    pub async fn fetch_asset_meta(&mut self, asset_id: &str) -> Result<AssetMeta, String> {
+        let req = taprpc::FetchAssetMetaRequest {
+            asset: Some(taprpc::fetch_asset_meta_request::Asset::AssetIdStr(
+                asset_id.to_string(),
+            )),
+        };
+        let m = self
+            .assets
+            .fetch_asset_meta(req)
+            .await
+            .map_err(|e| format!("fetch_asset_meta: {e}"))?
+            .into_inner();
+        let meta_type = format!(
+            "{:?}",
+            taprpc::AssetMetaType::try_from(m.r#type)
+                .unwrap_or(taprpc::AssetMetaType::MetaTypeOpaque)
+        );
+        Ok(AssetMeta {
+            data: String::from_utf8_lossy(&m.data).to_string(),
+            meta_type,
+            meta_hash: hex::encode(m.meta_hash),
+            decimal_display: m.decimal_display,
+        })
+    }
+
+    /// Node version + network. Non-sensitive; for a status panel.
+    pub async fn get_info(&mut self) -> Result<NodeInfo, String> {
+        let i = self
+            .assets
+            .get_info(taprpc::GetInfoRequest {})
+            .await
+            .map_err(|e| format!("get_info: {e}"))?
+            .into_inner();
+        Ok(NodeInfo {
+            version: i.version,
+            lnd_version: i.lnd_version,
+            network: i.network,
         })
     }
 
