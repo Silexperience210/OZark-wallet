@@ -24,6 +24,7 @@ pub mod event_kind {
     pub const MINT: &str = "mint";
     pub const RECEIVE: &str = "receive";
     pub const SEND: &str = "send";
+    pub const LN_SEND: &str = "ln_send";
     pub const BURN: &str = "burn";
     pub const TRANSFER_IN: &str = "transfer_in";
     pub const TRANSFER_OUT: &str = "transfer_out";

@@ -40,6 +40,7 @@ instant internal transfers. Endpoints:
 | GET    | `/v1/info`            | yes  | node version + network (non-sensitive) |
 | GET    | `/v1/ln/decode?pay_req=…&asset_id=…` | yes | decode a Lightning asset invoice (read-only) |
 | GET    | `/v1/ln/rfq-quotes`   | yes  | accepted RFQ quote counts (LN-asset routing health) |
+| POST   | `/v1/ln/pay`          | yes  | pay a Lightning asset invoice; **debits the caller** (refund on failure) |
 | GET    | `/v1/decode?addr=…`   | yes  | decode a Taproot Asset address |
 | POST   | `/v1/mint`            | yes  | mint an asset; credits the caller on confirmation (async) |
 | GET    | `/v1/mint/status?batch_key=…` | yes | mint progress; owner-gated |

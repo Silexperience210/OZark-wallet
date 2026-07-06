@@ -109,6 +109,8 @@ function kindLabel(kind: string): string {
       return "Reçu";
     case "send":
       return "Envoyé";
+    case "ln_send":
+      return "Envoyé (LN)";
     case "burn":
       return "Brûlé";
     case "transfer_in":
@@ -256,6 +258,27 @@ export function Gateway({ onBack }: GatewayProps) {
           assetId: lnAssetId.trim(),
         }),
       );
+    } catch (e) {
+      notify(String(e), "error");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const doLnPay = async () => {
+    if (!lnPayReq.trim() || !lnAssetId.trim())
+      return notify("Facture et asset id requis", "error");
+    setBusy(true);
+    try {
+      const r = await invoke<{ status: string; asset_amount: number }>("gateway_ln_pay", {
+        payReq: lnPayReq.trim(),
+        assetId: lnAssetId.trim(),
+        peerPubkey: null,
+      });
+      notify(`Paiement ${r.status} — ${r.asset_amount.toLocaleString()} unités`, "success");
+      setLnPayReq("");
+      setLnDecoded(null);
+      refresh();
     } catch (e) {
       notify(String(e), "error");
     } finally {
@@ -870,11 +893,19 @@ export function Gateway({ onBack }: GatewayProps) {
                     {lnDecoded.description}
                   </div>
                 )}
+                <button
+                  className="btn btn-primary"
+                  style={{ marginTop: 6 }}
+                  onClick={doLnPay}
+                  disabled={busy}
+                >
+                  {busy ? <span className="spinner" /> : null} Payer (débite ton solde)
+                </button>
               </div>
             )}
             <p className="text-muted" style={{ fontSize: 10, marginTop: 8 }}>
-              Lecture seule pour l'instant (décodage + état RFQ). Payer/recevoir en LN arrive
-              ensuite.
+              Décode puis paie une facture Lightning en asset (débite ton solde, remboursé si
+              échec). Recevoir en LN arrive ensuite.
             </p>
           </div>
         </>
