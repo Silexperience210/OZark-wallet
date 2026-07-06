@@ -16,7 +16,7 @@ use crate::auth::{authenticate, now_secs};
 use crate::error::{GatewayError, GatewayResult};
 use crate::reconcile::reconcile_all;
 use crate::state::AppState;
-use crate::tapd::{AssetInfo, DecodedAddr, UniverseRoot, UniverseStats};
+use crate::tapd::{AssetInfo, AssetMeta, DecodedAddr, NodeInfo, UniverseRoot, UniverseStats};
 
 pub fn router(state: AppState) -> Router {
     Router::new()
@@ -24,6 +24,8 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/assets", get(list_assets))
         .route("/v1/universe/stats", get(universe_stats))
         .route("/v1/universe/roots", get(universe_roots))
+        .route("/v1/asset/meta", get(asset_meta))
+        .route("/v1/info", get(node_info))
         .route("/v1/decode", get(decode))
         .route("/v1/balance", get(balance))
         .route("/v1/mint", post(mint))
@@ -142,6 +144,47 @@ async fn universe_roots(
         .await
         .map_err(GatewayError::Upstream)?;
     Ok(Json(roots))
+}
+
+#[derive(Debug, Deserialize)]
+struct AssetMetaQuery {
+    asset_id: String,
+}
+
+/// Public metadata for one asset (name/ticker blob, decimals). Not owner-scoped:
+/// asset genesis metadata is public, and it lets the client render human-readable
+/// amounts and names for any asset it can see.
+async fn asset_meta(
+    State(state): State<AppState>,
+    method: Method,
+    uri: Uri,
+    headers: HeaderMap,
+    Query(q): Query<AssetMetaQuery>,
+) -> GatewayResult<Json<AssetMeta>> {
+    auth_get(&state, &headers, &method, &uri)?;
+    let asset_id = q.asset_id.trim();
+    if asset_id.is_empty() {
+        return Err(GatewayError::BadRequest("asset_id is required".into()));
+    }
+    let mut tapd = state.tapd.clone();
+    let meta = tapd
+        .fetch_asset_meta(asset_id)
+        .await
+        .map_err(GatewayError::Upstream)?;
+    Ok(Json(meta))
+}
+
+/// Node version + network (non-sensitive status info).
+async fn node_info(
+    State(state): State<AppState>,
+    method: Method,
+    uri: Uri,
+    headers: HeaderMap,
+) -> GatewayResult<Json<NodeInfo>> {
+    auth_get(&state, &headers, &method, &uri)?;
+    let mut tapd = state.tapd.clone();
+    let info = tapd.get_info().await.map_err(GatewayError::Upstream)?;
+    Ok(Json(info))
 }
 
 #[derive(Debug, Deserialize)]
