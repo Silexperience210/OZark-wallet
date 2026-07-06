@@ -37,10 +37,16 @@ impl IntoResponse for GatewayError {
             GatewayError::BadRequest(_) => StatusCode::BAD_REQUEST,
             GatewayError::Upstream(_) => StatusCode::BAD_GATEWAY,
         };
-        // Don't leak internal detail beyond the category message we constructed.
-        let body = ErrorBody {
-            error: self.to_string(),
-        };
+        // The client only ever sees the category message; log the full detail
+        // here (operator-side) so upstream failures — tapd/litd errors, gRPC
+        // decode issues — are diagnosable. Upstream (502) is the interesting one.
+        let message = self.to_string();
+        if status == StatusCode::BAD_GATEWAY {
+            log::error!("gateway {} {}", status.as_u16(), message);
+        } else {
+            log::warn!("gateway {} {}", status.as_u16(), message);
+        }
+        let body = ErrorBody { error: message };
         (status, Json(body)).into_response()
     }
 }
