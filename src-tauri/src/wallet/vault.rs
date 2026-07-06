@@ -1,11 +1,12 @@
 use std::fs::remove_file;
 use std::path::PathBuf;
 
-use argon2::{Config, ThreadMode, Variant, Version};
 use rand::{rngs::OsRng, RngCore};
 use tauri::{AppHandle, Manager};
 use tauri_plugin_stronghold::stronghold::Stronghold;
 use zeroize::Zeroizing;
+
+use crate::kdf::{Argon2Params, KDF_VERSION_LATEST};
 
 use super::seed::{self, SeedError};
 
@@ -13,6 +14,7 @@ const SNAPSHOT_FILE: &str = "ozark-wallet.stronghold";
 const SALT_FILE: &str = "ozark-wallet.salt";
 const CLIENT_NAME: &[u8] = b"ark-client";
 const MNEMONIC_KEY: &str = "mnemonic";
+const SALT_LEN: usize = 16;
 
 #[derive(Debug, thiserror::Error)]
 pub enum VaultError {
@@ -26,6 +28,8 @@ pub enum VaultError {
     Seed(#[from] SeedError),
     #[error("argon2 error: {0}")]
     Argon2(String),
+    #[error("unsupported KDF version: {0} (wallet written by a newer build)")]
+    UnsupportedKdfVersion(u8),
     #[error("wallet not initialized")]
     NotInitialized,
     #[error("invalid password")]
@@ -57,36 +61,48 @@ fn salt_path(app_handle: &AppHandle) -> Result<PathBuf, VaultError> {
     Ok(app_data_dir(app_handle)?.join(SALT_FILE))
 }
 
-fn derive_key(password: &str, salt: &[u8]) -> Result<Zeroizing<Vec<u8>>, VaultError> {
-    let config = Config {
-        variant: Variant::Argon2id,
-        version: Version::Version13,
-        mem_cost: 65536,
-        time_cost: 3,
-        lanes: 4,
-        thread_mode: ThreadMode::Parallel,
-        secret: &[],
-        ad: &[],
-        hash_length: 32,
-    };
-
-    argon2::hash_raw(password.as_bytes(), salt, &config)
-        .map(Zeroizing::new)
-        .map_err(|e| VaultError::Argon2(e.to_string()))
+fn derive_key(password: &str, salt: &[u8], version: u8) -> Result<Zeroizing<Vec<u8>>, VaultError> {
+    let params =
+        Argon2Params::for_version(version).ok_or(VaultError::UnsupportedKdfVersion(version))?;
+    params.derive(password, salt).map_err(VaultError::Argon2)
 }
 
 fn generate_salt() -> Vec<u8> {
-    let mut salt = vec![0u8; 16];
+    let mut salt = vec![0u8; SALT_LEN];
     OsRng.fill_bytes(&mut salt[..]);
     salt
 }
 
-fn read_salt(app_handle: &AppHandle) -> Result<Vec<u8>, VaultError> {
+/// Serialize a salt with its KDF version as `[version][salt..]`.
+fn encode_salt(version: u8, salt: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(1 + salt.len());
+    out.push(version);
+    out.extend_from_slice(salt);
+    out
+}
+
+/// Parse a salt file, returning `(kdf_version, salt)`.
+///
+/// Two on-disk formats are accepted for backward compatibility:
+/// * legacy — exactly `SALT_LEN` raw bytes, no version prefix → KDF v1;
+/// * versioned — `[version][SALT_LEN salt]` (`SALT_LEN + 1` bytes).
+///
+/// The two are disambiguated purely by length, so an existing wallet's 16-byte
+/// salt keeps deriving with v1 parameters while new wallets write v2.
+fn decode_salt(data: &[u8]) -> Result<(u8, Vec<u8>), VaultError> {
+    match data.len() {
+        SALT_LEN => Ok((1, data.to_vec())),
+        len if len == SALT_LEN + 1 => Ok((data[0], data[1..].to_vec())),
+        _ => Err(VaultError::CorruptedSnapshot),
+    }
+}
+
+fn read_salt(app_handle: &AppHandle) -> Result<(u8, Vec<u8>), VaultError> {
     let path = salt_path(app_handle)?;
     if !path.exists() {
         return Err(VaultError::NotInitialized);
     }
-    Ok(std::fs::read(&path)?)
+    decode_salt(&std::fs::read(&path)?)
 }
 
 fn write_salt(path: &std::path::Path, salt: &[u8]) -> Result<(), VaultError> {
@@ -122,8 +138,12 @@ fn write_wallet_atomic(
         remove_file(&salt_tmp)?;
     }
 
+    // New wallets (and password changes / re-saves) are written with the latest
+    // hardened KDF parameters; the version is persisted in the salt file so the
+    // matching parameters are used to re-derive the key on unlock.
     let new_salt = generate_salt();
-    let key = derive_key(password, &new_salt)?;
+    let version = KDF_VERSION_LATEST;
+    let key = derive_key(password, &new_salt, version)?;
     let stronghold = Stronghold::new(&snapshot_tmp, key.to_vec())?;
     let client = stronghold.create_client(CLIENT_NAME)?;
     client
@@ -135,7 +155,7 @@ fn write_wallet_atomic(
         )
         .map_err(|e| VaultError::Stronghold(e.to_string()))?;
     stronghold.save()?;
-    write_salt(&salt_tmp, &new_salt)?;
+    write_salt(&salt_tmp, &encode_salt(version, &new_salt))?;
 
     // Rollback helper: restore old files if the replacement fails part-way.
     let rollback = || {
@@ -283,8 +303,8 @@ fn load_stronghold(app_handle: &AppHandle, password: &str) -> Result<Stronghold,
         return Err(VaultError::NotInitialized);
     }
 
-    let salt = read_salt(app_handle)?;
-    let key = derive_key(password, &salt)?;
+    let (version, salt) = read_salt(app_handle)?;
+    let key = derive_key(password, &salt, version)?;
 
     // Opening the snapshot decrypts it with the derived key. A failure here means
     // the password is wrong (key cannot decrypt the snapshot) — the snapshot file
@@ -340,4 +360,57 @@ pub fn delete_wallet(app_handle: &AppHandle) -> Result<(), VaultError> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn legacy_16_byte_salt_decodes_as_v1() {
+        let raw = vec![0xABu8; SALT_LEN];
+        let (version, salt) = decode_salt(&raw).unwrap();
+        assert_eq!(version, 1);
+        assert_eq!(salt, raw);
+    }
+
+    #[test]
+    fn versioned_salt_roundtrips() {
+        let salt = generate_salt();
+        let encoded = encode_salt(KDF_VERSION_LATEST, &salt);
+        assert_eq!(encoded.len(), SALT_LEN + 1);
+        assert_eq!(encoded[0], KDF_VERSION_LATEST);
+        let (version, decoded) = decode_salt(&encoded).unwrap();
+        assert_eq!(version, KDF_VERSION_LATEST);
+        assert_eq!(decoded, salt);
+    }
+
+    #[test]
+    fn wrong_length_salt_is_rejected() {
+        assert!(matches!(
+            decode_salt(&[1u8; 8]),
+            Err(VaultError::CorruptedSnapshot)
+        ));
+        assert!(matches!(
+            decode_salt(&[1u8; SALT_LEN + 5]),
+            Err(VaultError::CorruptedSnapshot)
+        ));
+    }
+
+    #[test]
+    fn derive_key_selects_params_by_version() {
+        let salt = [3u8; SALT_LEN];
+        let k1 = derive_key("pw", &salt, 1).unwrap();
+        let k2 = derive_key("pw", &salt, 2).unwrap();
+        // Distinct KDF parameters must yield distinct keys.
+        assert_ne!(k1.to_vec(), k2.to_vec());
+    }
+
+    #[test]
+    fn derive_key_rejects_unknown_version() {
+        assert!(matches!(
+            derive_key("pw", &[0u8; SALT_LEN], 200),
+            Err(VaultError::UnsupportedKdfVersion(200))
+        ));
+    }
 }

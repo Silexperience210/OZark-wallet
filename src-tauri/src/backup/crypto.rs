@@ -2,19 +2,26 @@ use aes_gcm::{
     aead::{Aead, KeyInit},
     Aes256Gcm, Nonce,
 };
-use argon2::{Config, ThreadMode, Variant, Version};
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use rand::{rngs::OsRng, RngCore};
-use zeroize::Zeroizing;
+
+use crate::kdf::{Argon2Params, KDF_VERSION_LATEST};
 
 const SALT_LEN: usize = 16;
 const NONCE_LEN: usize = 12;
-const KEY_LEN: usize = 32;
+
+/// Magic prefix marking a versioned backup blob (`OZBK`). Legacy blobs have no
+/// prefix and begin directly with the 16-byte salt; the two are told apart by
+/// this marker. A random legacy salt colliding with the marker (2^-32) would at
+/// worst fail to decrypt — never silently misparse — so the heuristic is safe.
+const MAGIC: &[u8; 4] = b"OZBK";
 
 #[derive(Debug, thiserror::Error)]
 pub enum BackupError {
     #[error("argon2 error: {0}")]
     Argon2(String),
+    #[error("unsupported KDF version: {0} (backup written by a newer build)")]
+    UnsupportedKdfVersion(u8),
     #[error("encryption error: {0}")]
     Encrypt(String),
     #[error("decryption error: {0}")]
@@ -25,33 +32,27 @@ pub enum BackupError {
     InvalidBase64(#[from] base64::DecodeError),
 }
 
-/// Derive a 32-byte encryption key from a password and salt using Argon2id.
-/// The returned key is wrapped in `Zeroizing` so it is wiped from memory on drop.
-pub fn derive_key(password: &str, salt: &[u8]) -> Result<Zeroizing<Vec<u8>>, BackupError> {
-    let config = Config {
-        variant: Variant::Argon2id,
-        version: Version::Version13,
-        mem_cost: 65536,
-        time_cost: 3,
-        lanes: 4,
-        thread_mode: ThreadMode::Parallel,
-        secret: &[],
-        ad: &[],
-        hash_length: KEY_LEN as u32,
-    };
-
-    argon2::hash_raw(password.as_bytes(), salt, &config)
-        .map(Zeroizing::new)
-        .map_err(|e| BackupError::Argon2(e.to_string()))
+fn derive_key(
+    password: &str,
+    salt: &[u8],
+    version: u8,
+) -> Result<zeroize::Zeroizing<Vec<u8>>, BackupError> {
+    let params =
+        Argon2Params::for_version(version).ok_or(BackupError::UnsupportedKdfVersion(version))?;
+    params.derive(password, salt).map_err(BackupError::Argon2)
 }
 
 /// Encrypt plaintext with AES-256-GCM using a password.
-/// Returns a base64-encoded string containing: salt + nonce + ciphertext.
+///
+/// Returns a base64-encoded string with the versioned layout:
+/// `MAGIC(4) + version(1) + salt(16) + nonce(12) + ciphertext`.
 pub fn encrypt(plaintext: &str, password: &str) -> Result<String, BackupError> {
+    let version = KDF_VERSION_LATEST;
+
     let mut salt = vec![0u8; SALT_LEN];
     OsRng.fill_bytes(&mut salt[..]);
 
-    let key = derive_key(password, &salt)?;
+    let key = derive_key(password, &salt, version)?;
     let cipher =
         Aes256Gcm::new_from_slice(&key).map_err(|e| BackupError::Encrypt(e.to_string()))?;
 
@@ -63,7 +64,9 @@ pub fn encrypt(plaintext: &str, password: &str) -> Result<String, BackupError> {
         .encrypt(nonce, plaintext.as_bytes())
         .map_err(|e| BackupError::Encrypt(e.to_string()))?;
 
-    let mut output = Vec::with_capacity(SALT_LEN + NONCE_LEN + ciphertext.len());
+    let mut output = Vec::with_capacity(MAGIC.len() + 1 + SALT_LEN + NONCE_LEN + ciphertext.len());
+    output.extend_from_slice(MAGIC);
+    output.push(version);
     output.extend_from_slice(&salt);
     output.extend_from_slice(&nonce_bytes);
     output.extend_from_slice(&ciphertext);
@@ -72,18 +75,36 @@ pub fn encrypt(plaintext: &str, password: &str) -> Result<String, BackupError> {
 }
 
 /// Decrypt a backup produced by `encrypt`.
+///
+/// Accepts both the versioned layout (prefixed with `MAGIC`) and the legacy
+/// unversioned layout (`salt + nonce + ciphertext`, KDF v1) so backups exported
+/// before versioning can still be restored.
 pub fn decrypt(backup_b64: &str, password: &str) -> Result<String, BackupError> {
     let data = BASE64.decode(backup_b64)?;
 
-    if data.len() < SALT_LEN + NONCE_LEN + 1 {
-        return Err(BackupError::InvalidFormat);
-    }
+    let (version, salt, nonce_bytes, ciphertext) = if data.starts_with(MAGIC) {
+        let rest = &data[MAGIC.len()..];
+        // version(1) + salt + nonce + at least one ciphertext byte
+        if rest.len() < 1 + SALT_LEN + NONCE_LEN + 1 {
+            return Err(BackupError::InvalidFormat);
+        }
+        let version = rest[0];
+        let salt = &rest[1..1 + SALT_LEN];
+        let nonce = &rest[1 + SALT_LEN..1 + SALT_LEN + NONCE_LEN];
+        let ct = &rest[1 + SALT_LEN + NONCE_LEN..];
+        (version, salt, nonce, ct)
+    } else {
+        // Legacy unversioned blob: salt + nonce + ciphertext, always KDF v1.
+        if data.len() < SALT_LEN + NONCE_LEN + 1 {
+            return Err(BackupError::InvalidFormat);
+        }
+        let salt = &data[..SALT_LEN];
+        let nonce = &data[SALT_LEN..SALT_LEN + NONCE_LEN];
+        let ct = &data[SALT_LEN + NONCE_LEN..];
+        (1u8, salt, nonce, ct)
+    };
 
-    let salt = &data[..SALT_LEN];
-    let nonce_bytes = &data[SALT_LEN..SALT_LEN + NONCE_LEN];
-    let ciphertext = &data[SALT_LEN + NONCE_LEN..];
-
-    let key = derive_key(password, salt)?;
+    let key = derive_key(password, salt, version)?;
     let cipher =
         Aes256Gcm::new_from_slice(&key).map_err(|e| BackupError::Decrypt(e.to_string()))?;
 
@@ -116,10 +137,18 @@ mod tests {
     }
 
     #[test]
+    fn test_new_blob_is_versioned() {
+        let encrypted = encrypt("seed phrase", "password").unwrap();
+        let decoded = BASE64.decode(&encrypted).unwrap();
+        assert!(decoded.starts_with(MAGIC));
+        assert_eq!(decoded[MAGIC.len()], KDF_VERSION_LATEST);
+    }
+
+    #[test]
     fn test_backup_format_length() {
         let encrypted = encrypt("seed phrase", "password").unwrap();
         let decoded = BASE64.decode(&encrypted).unwrap();
-        assert!(decoded.len() > SALT_LEN + NONCE_LEN);
+        assert!(decoded.len() > MAGIC.len() + 1 + SALT_LEN + NONCE_LEN);
     }
 
     #[test]
@@ -146,7 +175,9 @@ mod tests {
     fn test_tampered_nonce_fails() {
         let encrypted = encrypt("seed phrase", "password").unwrap();
         let mut decoded = BASE64.decode(&encrypted).unwrap();
-        decoded[SALT_LEN] ^= 0xFF;
+        // Nonce starts right after MAGIC + version + salt.
+        let nonce_start = MAGIC.len() + 1 + SALT_LEN;
+        decoded[nonce_start] ^= 0xFF;
         let tampered = BASE64.encode(&decoded);
         assert!(decrypt(&tampered, "password").is_err());
     }
@@ -161,5 +192,35 @@ mod tests {
         let encrypted = encrypt("", "password").unwrap();
         let decrypted = decrypt(&encrypted, "password").unwrap();
         assert_eq!(decrypted, "");
+    }
+
+    /// A backup written in the pre-versioning layout (`salt + nonce + ct`, KDF
+    /// v1, no magic prefix) must still restore.
+    #[test]
+    fn test_legacy_unversioned_blob_decrypts() {
+        let plaintext = "legacy seed phrase words";
+        let password = "legacy_password";
+
+        // Reproduce the old on-disk format by hand using v1 parameters.
+        let mut salt = vec![0u8; SALT_LEN];
+        OsRng.fill_bytes(&mut salt[..]);
+        let key = Argon2Params::for_version(1)
+            .unwrap()
+            .derive(password, &salt)
+            .unwrap();
+        let cipher = Aes256Gcm::new_from_slice(&key).unwrap();
+        let mut nonce_bytes = vec![0u8; NONCE_LEN];
+        OsRng.fill_bytes(&mut nonce_bytes[..]);
+        let nonce = Nonce::from_slice(&nonce_bytes);
+        let ct = cipher.encrypt(nonce, plaintext.as_bytes()).unwrap();
+
+        let mut legacy = Vec::new();
+        legacy.extend_from_slice(&salt);
+        legacy.extend_from_slice(&nonce_bytes);
+        legacy.extend_from_slice(&ct);
+        let legacy_b64 = BASE64.encode(&legacy);
+
+        let decrypted = decrypt(&legacy_b64, password).unwrap();
+        assert_eq!(decrypted, plaintext);
     }
 }
