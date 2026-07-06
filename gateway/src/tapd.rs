@@ -434,6 +434,59 @@ impl TapdClient {
         })
     }
 
+    /// Pay a Lightning **asset** invoice over an asset channel, spending `asset_id`.
+    /// Streams the payment and returns the final status string (e.g. "Succeeded",
+    /// "Failed"). The **caller** must have already reserved the asset amount in the
+    /// ledger — this only drives the tapd/litd payment.
+    pub async fn pay_asset_invoice(
+        &mut self,
+        pay_req: &str,
+        asset_id: &str,
+        peer_pubkey: &str,
+    ) -> Result<String, String> {
+        let asset_id = hex::decode(asset_id).map_err(|e| format!("invalid asset id: {e}"))?;
+        let peer_pubkey = if peer_pubkey.trim().is_empty() {
+            vec![]
+        } else {
+            hex::decode(peer_pubkey).map_err(|e| format!("invalid peer pubkey: {e}"))?
+        };
+        let inner = routerrpc::SendPaymentRequest {
+            payment_request: pay_req.to_string(),
+            timeout_seconds: 60,
+            ..Default::default()
+        };
+        let req = tapchannelrpc::SendPaymentRequest {
+            asset_id,
+            peer_pubkey,
+            payment_request: Some(inner),
+            ..Default::default()
+        };
+        let mut stream = self
+            .tapchannel
+            .send_payment(req)
+            .await
+            .map_err(|e| format!("send_payment: {e}"))?
+            .into_inner();
+        let succeeded = lnrpc::payment::PaymentStatus::Succeeded as i32;
+        let failed = lnrpc::payment::PaymentStatus::Failed as i32;
+        let mut status = "pending".to_string();
+        while let Ok(Some(resp)) = stream.message().await {
+            if let Some(tapchannelrpc::send_payment_response::Result::PaymentResult(p)) =
+                resp.result
+            {
+                status = format!(
+                    "{:?}",
+                    lnrpc::payment::PaymentStatus::try_from(p.status)
+                        .unwrap_or(lnrpc::payment::PaymentStatus::Unknown)
+                );
+                if p.status == succeeded || p.status == failed {
+                    break;
+                }
+            }
+        }
+        Ok(status)
+    }
+
     /// The node's currently-accepted RFQ quote counts (buy/sell). Read-only.
     pub async fn list_rfq_quotes(&mut self) -> Result<RfqQuotes, String> {
         let resp = self

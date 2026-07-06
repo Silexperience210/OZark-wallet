@@ -149,6 +149,27 @@ pub async fn gateway_ln_rfq_quotes(
         .await
 }
 
+/// Pay a Lightning asset invoice: debits the caller's asset balance (reserved,
+/// refunded on failure) and settles over an asset channel.
+#[command]
+pub async fn gateway_ln_pay(
+    state: State<'_, WalletState>,
+    app_handle: AppHandle,
+    pay_req: String,
+    asset_id: String,
+    peer_pubkey: Option<String>,
+) -> Result<Value, String> {
+    let body = json!({
+        "pay_req": pay_req,
+        "asset_id": asset_id,
+        "peer_pubkey": peer_pubkey,
+    });
+    client(&state, &app_handle)
+        .await?
+        .post("/v1/ln/pay", body)
+        .await
+}
+
 #[command]
 #[allow(clippy::too_many_arguments)]
 pub async fn gateway_mint(

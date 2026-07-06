@@ -35,6 +35,7 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/history", get(history))
         .route("/v1/ln/decode", get(ln_decode))
         .route("/v1/ln/rfq-quotes", get(ln_rfq_quotes))
+        .route("/v1/ln/pay", post(ln_pay))
         .route("/v1/mint", post(mint))
         .route("/v1/mint/status", get(mint_status))
         .route("/v1/receive", post(receive))
@@ -317,6 +318,91 @@ async fn ln_rfq_quotes(
         .await
         .map_err(GatewayError::Upstream)?;
     Ok(Json(quotes))
+}
+
+#[derive(Debug, Deserialize)]
+struct LnPayRequest {
+    pay_req: String,
+    asset_id: String,
+    #[serde(default)]
+    peer_pubkey: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct LnPayResponse {
+    status: String,
+    asset_amount: u64,
+}
+
+/// Pay a Lightning asset invoice, spending the caller's `asset_id` balance. The
+/// amount is read from the decoded invoice; the caller is **debited first**
+/// (reserved) and refunded unless the payment succeeds — mirroring the on-chain
+/// send. Only a "Succeeded" result keeps the debit.
+async fn ln_pay(
+    State(state): State<AppState>,
+    method: Method,
+    uri: Uri,
+    headers: HeaderMap,
+    body: Bytes,
+) -> GatewayResult<Json<LnPayResponse>> {
+    let pubkey = auth_body(&state, &headers, &method, &uri, &body)?;
+    let req: LnPayRequest = serde_json::from_slice(&body)
+        .map_err(|e| GatewayError::BadRequest(format!("invalid ln pay body: {e}")))?;
+    let pay_req = req.pay_req.trim();
+    let asset_id = req.asset_id.trim();
+    if pay_req.is_empty() || asset_id.is_empty() {
+        return Err(GatewayError::BadRequest(
+            "pay_req and asset_id are required".into(),
+        ));
+    }
+
+    let mut tapd = state.tapd.clone();
+    // Decode to learn how many asset units the invoice consumes.
+    let decoded = tapd
+        .decode_asset_invoice(pay_req, asset_id)
+        .await
+        .map_err(GatewayError::Upstream)?;
+    let amount = decoded.asset_amount;
+    if amount == 0 {
+        return Err(GatewayError::BadRequest(
+            "invoice settles zero asset units".into(),
+        ));
+    }
+
+    // Reserve the caller's balance before paying (403 if insufficient).
+    state.registry.debit(asset_id, &pubkey, amount)?;
+
+    let peer = req.peer_pubkey.as_deref().unwrap_or("");
+    match tapd.pay_asset_invoice(pay_req, asset_id, peer).await {
+        Ok(status) if status == "Succeeded" => {
+            let counterparty =
+                (!decoded.destination.is_empty()).then_some(decoded.destination.as_str());
+            let _ = state.registry.record_event(
+                &pubkey,
+                asset_id,
+                event_kind::LN_SEND,
+                amount,
+                counterparty,
+                None,
+                now_secs() as i64,
+            );
+            Ok(Json(LnPayResponse {
+                status,
+                asset_amount: amount,
+            }))
+        }
+        Ok(status) => {
+            // Not settled — refund the reservation.
+            let _ = state.registry.credit(asset_id, &pubkey, amount);
+            Err(GatewayError::Upstream(format!(
+                "payment not completed: {status}"
+            )))
+        }
+        Err(e) => {
+            let _ = state.registry.credit(asset_id, &pubkey, amount);
+            Err(GatewayError::Upstream(e))
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]
