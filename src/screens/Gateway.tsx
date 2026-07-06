@@ -131,6 +131,7 @@ export function Gateway({ onBack }: GatewayProps) {
   const [mintAmount, setMintAmount] = useState("");
   const [mintMeta, setMintMeta] = useState("");
   const [mintCollectible, setMintCollectible] = useState(false);
+  const [mintFee, setMintFee] = useState("");
   const [lastBatch, setLastBatch] = useState("");
   const [mintStatus, setMintStatus] = useState<string>("");
 
@@ -229,7 +230,7 @@ export function Gateway({ onBack }: GatewayProps) {
         amount: num(mintAmount),
         meta: mintMeta.trim() || null,
         collectible: mintCollectible,
-        feeRateSatVb: null,
+        feeRateSatVb: mintFee ? num(mintFee) : null,
       });
       setLastBatch(r.batch_key);
       notify("Mint diffusé — en attente de confirmation", "info");
@@ -584,6 +585,17 @@ export function Gateway({ onBack }: GatewayProps) {
                 />
                 Collectible (pièce unique)
               </label>
+              <input
+                className="input"
+                style={{ width: "100%", marginBottom: 4 }}
+                type="number"
+                placeholder="Frais sat/vB (optionnel)"
+                value={mintFee}
+                onChange={(e) => setMintFee(e.target.value)}
+              />
+              <p className="text-muted" style={{ fontSize: 10, marginBottom: 10 }}>
+                Vide = estimation automatique du nœud.
+              </p>
               <button className="btn btn-primary" onClick={doMint} disabled={busy}>
                 {busy ? <span className="spinner" /> : null} Émettre
               </button>
@@ -677,6 +689,9 @@ export function Gateway({ onBack }: GatewayProps) {
                   {busy ? <span className="spinner" /> : null} Envoyer
                 </button>
               </div>
+              <p className="text-muted" style={{ fontSize: 10 }}>
+                Vide = estimation automatique du nœud. Les transferts internes sont gratuits.
+              </p>
             </div>
           </div>
 
