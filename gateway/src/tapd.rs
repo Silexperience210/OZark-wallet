@@ -350,6 +350,7 @@ impl TapdClient {
         amount: u64,
         metadata: &str,
         collectible: bool,
+        grouped: bool,
         fee_rate_sat_vb: u32,
     ) -> Result<MintOutcome, String> {
         let meta = taprpc::AssetMeta {
@@ -369,6 +370,9 @@ impl TapdClient {
             name: name.to_string(),
             asset_meta: Some(meta),
             amount,
+            // Emit a group key so more of this asset can be issued later (a
+            // reissuable group). Off => a fixed one-off supply.
+            new_grouped_asset: grouped,
             ..Default::default()
         };
         self.mint
