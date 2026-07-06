@@ -33,6 +33,7 @@ instant internal transfers. Endpoints:
 | GET    | `/health`             | no   | liveness |
 | GET    | `/v1/assets`          | yes  | the caller's **balances**, enriched with tapd metadata |
 | GET    | `/v1/balance?asset_id=…` | yes | the caller's balance of one asset |
+| GET    | `/v1/history?limit=…` | yes  | the caller's tx history (mint/receive/send/burn/transfers), owner-scoped |
 | GET    | `/v1/universe/stats`  | yes  | global aggregate (not owner-scoped) |
 | GET    | `/v1/universe/roots`  | yes  | global aggregate (not owner-scoped) |
 | GET    | `/v1/asset/meta?asset_id=…` | yes | public asset metadata (name/ticker blob, decimals) |

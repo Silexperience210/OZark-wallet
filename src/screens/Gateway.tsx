@@ -12,6 +12,7 @@ import {
   Copy,
   Check,
   Info,
+  Clock,
 } from "lucide-react";
 import { useNotification } from "../contexts/NotificationContext";
 
@@ -64,6 +65,16 @@ interface NodeInfo {
   network: string;
 }
 
+interface LedgerEvent {
+  id: number;
+  asset_id: string;
+  kind: string;
+  amount: number;
+  counterparty: string | null;
+  reference: string | null;
+  created_at: number;
+}
+
 const card: CSSProperties = { padding: 18, marginBottom: 14 };
 const label: CSSProperties = { fontSize: 12, fontWeight: 600, marginBottom: 6, display: "block" };
 const row: CSSProperties = { display: "flex", gap: 8, marginBottom: 8 };
@@ -74,6 +85,27 @@ function num(v: string): number {
 
 function short(s: string, head = 10, tail = 6): string {
   return s.length > head + tail + 1 ? `${s.slice(0, head)}…${s.slice(-tail)}` : s;
+}
+
+const CREDIT_KINDS = new Set(["mint", "receive", "transfer_in"]);
+
+function kindLabel(kind: string): string {
+  switch (kind) {
+    case "mint":
+      return "Mint";
+    case "receive":
+      return "Reçu";
+    case "send":
+      return "Envoyé";
+    case "burn":
+      return "Brûlé";
+    case "transfer_in":
+      return "Transfert reçu";
+    case "transfer_out":
+      return "Transfert envoyé";
+    default:
+      return kind;
+  }
 }
 
 export function Gateway({ onBack }: GatewayProps) {
@@ -90,6 +122,9 @@ export function Gateway({ onBack }: GatewayProps) {
   const [metaFor, setMetaFor] = useState<string | null>(null);
   const [meta, setMeta] = useState<AssetMeta | null>(null);
   const [metaLoading, setMetaLoading] = useState(false);
+
+  // Transaction history (per-user ledger)
+  const [history, setHistory] = useState<LedgerEvent[]>([]);
 
   // Mint
   const [mintName, setMintName] = useState("");
@@ -146,11 +181,16 @@ export function Gateway({ onBack }: GatewayProps) {
     try {
       const a = await invoke<HeldAsset[]>("gateway_list_assets");
       setAssets(a);
-      // Node info is best-effort: a failure here must not hide balances.
+      // Node info + history are best-effort: a failure must not hide balances.
       try {
         setNodeInfo(await invoke<NodeInfo>("gateway_info"));
       } catch {
         setNodeInfo(null);
+      }
+      try {
+        setHistory(await invoke<LedgerEvent[]>("gateway_history", { limit: 50 }));
+      } catch {
+        setHistory([]);
       }
     } catch (e) {
       notify(String(e), "error");
@@ -449,6 +489,57 @@ export function Gateway({ onBack }: GatewayProps) {
                     )}
                   </div>
                 ))}
+              </div>
+            )}
+          </div>
+
+          {/* History */}
+          <div className="glass-card" style={card}>
+            <strong>
+              <Clock size={16} style={{ verticalAlign: "-3px", marginRight: 6 }} />
+              Activité
+            </strong>
+            {history.length === 0 ? (
+              <p className="text-muted" style={{ fontSize: 12, marginTop: 8 }}>
+                Aucune activité pour le moment.
+              </p>
+            ) : (
+              <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 10 }}>
+                {history.map((e) => {
+                  const credit = CREDIT_KINDS.has(e.kind);
+                  return (
+                    <div
+                      key={e.id}
+                      style={{
+                        display: "flex",
+                        justifyContent: "space-between",
+                        alignItems: "center",
+                        padding: "8px 10px",
+                        background: "rgba(255,255,255,0.03)",
+                        borderRadius: 8,
+                      }}
+                    >
+                      <div style={{ minWidth: 0 }}>
+                        <div style={{ fontSize: 13, fontWeight: 600 }}>{kindLabel(e.kind)}</div>
+                        <div className="text-muted" style={{ fontSize: 10, fontFamily: "monospace" }}>
+                          {short(e.asset_id)}
+                          {e.counterparty ? ` · ${short(e.counterparty, 8, 6)}` : ""}
+                        </div>
+                      </div>
+                      <div
+                        style={{
+                          fontWeight: 700,
+                          fontSize: 14,
+                          whiteSpace: "nowrap",
+                          color: credit ? "#4ade80" : "#f87171",
+                        }}
+                      >
+                        {credit ? "+" : "−"}
+                        {e.amount.toLocaleString()}
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
             )}
           </div>

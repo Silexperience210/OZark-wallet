@@ -90,6 +90,17 @@ pub async fn gateway_balance(
     client(&state, &app_handle).await?.get(&path).await
 }
 
+/// The caller's transaction history (owner-scoped ledger events), newest first.
+#[command]
+pub async fn gateway_history(
+    state: State<'_, WalletState>,
+    app_handle: AppHandle,
+    limit: Option<u32>,
+) -> Result<Value, String> {
+    let path = format!("/v1/history?limit={}", limit.unwrap_or(50));
+    client(&state, &app_handle).await?.get(&path).await
+}
+
 /// Public metadata (name/ticker blob, decimals) for one asset.
 #[command]
 pub async fn gateway_asset_meta(
