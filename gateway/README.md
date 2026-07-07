@@ -156,9 +156,17 @@ binds the token to a single endpoint).
 | `OZARK_GATEWAY_FEE_FLOOR_SATS` | no  | `100` | minimum sats per chargeable op |
 | `OZARK_GATEWAY_MINT_VSIZE` / `_SEND_VSIZE` | no | `250` / `200` | assumed tx vsize for the estimate |
 | `OZARK_GATEWAY_DEFAULT_FEE_RATE` | no | `5` | sat/vB assumed when the request omits a rate |
+| `OZARK_GATEWAY_RATE_BURST`     | no  | `30` | per-pubkey rate-limit burst (bucket capacity); `0` disables |
+| `OZARK_GATEWAY_RATE_PER_SEC`   | no  | `5` | per-pubkey sustained request rate (tokens/sec) |
 
 (Other optional vars — admin/claim, reconcile interval, backups — are documented in
 `deploy/env.example`.)
+
+**Abuse protection:** after signature verification, each authenticated request is
+subject to a **per-pubkey token-bucket rate limit** (429 when exceeded) and a
+**single-use (anti-replay) check** on the NIP-98 event id — a captured
+`Authorization` header can't be replayed within its freshness window to repeat a
+charged `mint`/`send`. Both are process-local and self-pruning.
 
 ## Deployment (Umbrel)
 

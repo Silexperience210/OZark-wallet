@@ -95,6 +95,12 @@ pub struct Config {
     pub send_vsize: u64,
     /// Fee rate (sat/vB) assumed when the request doesn't specify one. Default 5.
     pub default_fee_rate_sat_vb: u32,
+
+    /// Per-pubkey rate-limit token-bucket capacity (max burst). `<= 0` disables
+    /// rate limiting. Default 30.
+    pub rate_burst: f64,
+    /// Per-pubkey sustained request rate (tokens/sec refilled). Default 5.
+    pub rate_per_sec: f64,
 }
 
 impl Config {
@@ -143,6 +149,8 @@ impl Config {
         let mint_vsize = env_u64("OZARK_GATEWAY_MINT_VSIZE", 250);
         let send_vsize = env_u64("OZARK_GATEWAY_SEND_VSIZE", 200);
         let default_fee_rate_sat_vb = env_u64("OZARK_GATEWAY_DEFAULT_FEE_RATE", 5) as u32;
+        let rate_burst = env_f64("OZARK_GATEWAY_RATE_BURST", 30.0);
+        let rate_per_sec = env_f64("OZARK_GATEWAY_RATE_PER_SEC", 5.0);
 
         let backup_key = match std::env::var("OZARK_GATEWAY_BACKUP_KEY") {
             Ok(s) if !s.trim().is_empty() => {
@@ -179,11 +187,20 @@ impl Config {
             mint_vsize,
             send_vsize,
             default_fee_rate_sat_vb,
+            rate_burst,
+            rate_per_sec,
         })
     }
 }
 
 fn env_u64(key: &str, default: u64) -> u64 {
+    std::env::var(key)
+        .ok()
+        .and_then(|s| s.trim().parse().ok())
+        .unwrap_or(default)
+}
+
+fn env_f64(key: &str, default: f64) -> f64 {
     std::env::var(key)
         .ok()
         .and_then(|s| s.trim().parse().ok())

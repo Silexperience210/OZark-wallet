@@ -22,6 +22,10 @@ pub enum GatewayError {
     /// A downstream dependency (tapd, registry) failed.
     #[error("upstream error: {0}")]
     Upstream(String),
+
+    /// The caller exceeded their per-pubkey rate limit.
+    #[error("too many requests: {0}")]
+    TooManyRequests(String),
 }
 
 #[derive(Serialize)]
@@ -36,6 +40,7 @@ impl IntoResponse for GatewayError {
             GatewayError::Forbidden(_) => StatusCode::FORBIDDEN,
             GatewayError::BadRequest(_) => StatusCode::BAD_REQUEST,
             GatewayError::Upstream(_) => StatusCode::BAD_GATEWAY,
+            GatewayError::TooManyRequests(_) => StatusCode::TOO_MANY_REQUESTS,
         };
         // The client only ever sees the category message; log the full detail
         // here (operator-side) so upstream failures — tapd/litd errors, gRPC
@@ -55,7 +60,13 @@ pub type GatewayResult<T> = Result<T, GatewayError>;
 
 impl From<crate::auth::AuthError> for GatewayError {
     fn from(e: crate::auth::AuthError) -> Self {
-        GatewayError::Unauthorized(e.to_string())
+        use crate::auth::AuthError as A;
+        let msg = e.to_string();
+        match e {
+            // Throttling is a distinct 429, not an auth failure.
+            A::RateLimited => GatewayError::TooManyRequests(msg),
+            _ => GatewayError::Unauthorized(msg),
+        }
     }
 }
 

@@ -44,13 +44,22 @@ pub enum AuthError {
     MethodMismatch,
     #[error("request body does not match the signed 'payload' tag")]
     PayloadMismatch,
+    #[error("auth event already used (replay)")]
+    Replayed,
+    #[error("rate limit exceeded")]
+    RateLimited,
 }
 
-/// Result of a successful verification: the caller's identity.
+/// Result of a successful verification: the caller's identity plus the fields the
+/// replay guard needs (the event id, and when it goes stale).
 #[derive(Debug, PartialEq, Eq)]
 pub struct VerifiedAuth {
     /// x-only pubkey, 64-hex — the account id all ownership checks use.
     pub pubkey_hex: String,
+    /// The NIP-98 event id (64-hex) — spent once, for replay protection.
+    pub event_id: String,
+    /// The event's `created_at` (unix secs), for computing the replay expiry.
+    pub created_at: u64,
 }
 
 /// Verify a NIP-98 Authorization header against the request it accompanies.
@@ -129,6 +138,8 @@ pub fn verify_nip98(
 
     Ok(VerifiedAuth {
         pubkey_hex: event.pubkey.to_hex(),
+        event_id: event.id.to_hex(),
+        created_at: ts,
     })
 }
 
@@ -162,10 +173,12 @@ fn path_and_query(u: &Url) -> String {
 }
 
 /// Extract-and-verify helper for handlers: pulls the header/method/URL off the
-/// request, reconstructs the expected URL per config, and returns the caller's
+/// request, reconstructs the expected URL per config, enforces the per-pubkey rate
+/// limit and single-use (anti-replay) of the auth event, and returns the caller's
 /// pubkey. GET handlers pass an empty body (their auth events carry no payload).
 pub fn authenticate(
     auth: &AuthConfig,
+    security: &crate::security::Security,
     headers: &axum::http::HeaderMap,
     method: &axum::http::Method,
     uri: &axum::http::Uri,
@@ -186,15 +199,30 @@ pub fn authenticate(
         None => (pq.to_string(), false),
     };
 
+    let now = now_secs();
     let verified = verify_nip98(
         header,
         method.as_str(),
         &expected,
         host_strict,
         body,
-        now_secs(),
+        now,
         auth.max_skew_secs,
     )?;
+
+    // Post-verification guards (we now have a trusted pubkey + event id).
+    if !security.allow_rate(&verified.pubkey_hex) {
+        return Err(AuthError::RateLimited);
+    }
+    // The event can be replayed only within its freshness window; expire the
+    // spent id just past it (+1s guard) so the map self-empties.
+    let expiry = verified
+        .created_at
+        .saturating_add(auth.max_skew_secs)
+        .saturating_add(1);
+    if !security.check_replay(&verified.event_id, expiry, now) {
+        return Err(AuthError::Replayed);
+    }
     Ok(verified.pubkey_hex)
 }
 
@@ -341,5 +369,65 @@ mod tests {
             verify_nip98(&h, "POST", URL, true, b"world", now, 60),
             Err(AuthError::PayloadMismatch)
         );
+    }
+
+    use crate::security::{Security, SecurityConfig};
+
+    fn test_auth_config() -> AuthConfig {
+        AuthConfig {
+            public_base_url: None,
+            max_skew_secs: 60,
+            admin_pubkey: None,
+            allow_admin_claim: false,
+        }
+    }
+
+    fn headers_with(value: &str) -> axum::http::HeaderMap {
+        let mut h = axum::http::HeaderMap::new();
+        h.insert(axum::http::header::AUTHORIZATION, value.parse().unwrap());
+        h
+    }
+
+    #[test]
+    fn authenticate_rejects_replay() {
+        let keys = Keys::generate();
+        let auth = test_auth_config();
+        // Generous limiter so the *only* thing rejecting the 2nd call is replay.
+        let sec = Security::new(SecurityConfig {
+            burst: 100.0,
+            refill_per_sec: 100.0,
+        });
+        let uri: axum::http::Uri = "/v1/assets".parse().unwrap();
+        let method = axum::http::Method::GET;
+        // created_at must be within skew of *real* now (authenticate uses now_secs()).
+        let h = header_with(&keys, "GET", URL, now_secs(), None);
+        let headers = headers_with(&h);
+
+        let first = authenticate(&auth, &sec, &headers, &method, &uri, &[]);
+        assert_eq!(first.unwrap(), keys.public_key().to_hex());
+        let second = authenticate(&auth, &sec, &headers, &method, &uri, &[]);
+        assert_eq!(second, Err(AuthError::Replayed));
+    }
+
+    #[test]
+    fn authenticate_rate_limits_per_pubkey() {
+        let keys = Keys::generate();
+        let auth = test_auth_config();
+        // Burst of 1, negligible refill: the 2nd distinct request is throttled.
+        let sec = Security::new(SecurityConfig {
+            burst: 1.0,
+            refill_per_sec: 0.000_001,
+        });
+        let uri: axum::http::Uri = "/v1/assets".parse().unwrap();
+        let method = axum::http::Method::GET;
+        let now = now_secs();
+        // Distinct created_at -> distinct event ids, so replay is not the cause.
+        let h1 = header_with(&keys, "GET", URL, now, None);
+        let h2 = header_with(&keys, "GET", URL, now + 1, None);
+
+        let r1 = authenticate(&auth, &sec, &headers_with(&h1), &method, &uri, &[]);
+        assert!(r1.is_ok());
+        let r2 = authenticate(&auth, &sec, &headers_with(&h2), &method, &uri, &[]);
+        assert_eq!(r2, Err(AuthError::RateLimited));
     }
 }

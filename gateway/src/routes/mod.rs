@@ -66,7 +66,14 @@ fn auth_get(
     method: &Method,
     uri: &Uri,
 ) -> GatewayResult<String> {
-    Ok(authenticate(&state.auth, headers, method, uri, &[])?)
+    Ok(authenticate(
+        &state.auth,
+        &state.security,
+        headers,
+        method,
+        uri,
+        &[],
+    )?)
 }
 
 /// Authenticate a request whose body is signed via the NIP-98 `payload` tag.
@@ -77,7 +84,14 @@ fn auth_body(
     uri: &Uri,
     body: &[u8],
 ) -> GatewayResult<String> {
-    Ok(authenticate(&state.auth, headers, method, uri, body)?)
+    Ok(authenticate(
+        &state.auth,
+        &state.security,
+        headers,
+        method,
+        uri,
+        body,
+    )?)
 }
 
 /// The current operator pubkey: the env-configured one wins; else a prior claim
@@ -98,7 +112,8 @@ fn auth_admin(
     uri: &Uri,
     body: &[u8],
 ) -> GatewayResult<()> {
-    let caller = authenticate(&state.auth, headers, method, uri, body)?.to_lowercase();
+    let caller =
+        authenticate(&state.auth, &state.security, headers, method, uri, body)?.to_lowercase();
     match effective_admin(state)? {
         Some(admin) if admin == caller => Ok(()),
         _ => Err(GatewayError::Forbidden("operator only".into())),

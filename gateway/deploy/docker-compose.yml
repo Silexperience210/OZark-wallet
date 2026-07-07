@@ -41,6 +41,10 @@ services:
       # Background maintenance interval (reconcile + solvency audit + invoice
       # purge), seconds. 0 disables the loop (per-request reconcile still runs).
       OZARK_GATEWAY_RECONCILE_INTERVAL_SECS: ${OZARK_GATEWAY_RECONCILE_INTERVAL_SECS:-60}
+      # Per-pubkey rate limit (token bucket) applied after NIP-98 verification.
+      # BURST=0 disables. Anti-replay of the NIP-98 event id is always on.
+      OZARK_GATEWAY_RATE_BURST: ${OZARK_GATEWAY_RATE_BURST:-30}
+      OZARK_GATEWAY_RATE_PER_SEC: ${OZARK_GATEWAY_RATE_PER_SEC:-5}
       # Encrypted ledger backups (recommended — the ledger IS the custody record).
       # Set DIR to /backups and KEY to a 32-byte hex secret to enable + encrypt.
       # Left empty = disabled. Without KEY, snapshots are written in the clear.
