@@ -8,6 +8,7 @@
 //! Phase 1: skeleton + NIP-98 auth + read endpoints + ownership registry.
 
 mod auth;
+mod backup;
 mod config;
 mod error;
 mod reconcile;
@@ -17,6 +18,7 @@ mod state;
 mod tapd;
 
 use std::sync::Arc;
+use std::time::Duration;
 
 #[tokio::main]
 async fn main() {
@@ -69,6 +71,11 @@ async fn run() -> Result<(), String> {
         },
     };
 
+    // Background maintenance: periodic reconciliation + solvency audit + stale
+    // invoice purge, and (if configured) encrypted ledger snapshots. Additive to
+    // the opportunistic per-request reconciliation.
+    spawn_maintenance(&cfg, state.tapd.clone(), state.registry.clone());
+
     let app = routes::router(state);
     let listener = tokio::net::TcpListener::bind(&cfg.listen_addr)
         .await
@@ -88,6 +95,71 @@ async fn run() -> Result<(), String> {
         .await
         .map_err(|e| format!("serve: {e}"))?;
     Ok(())
+}
+
+/// Spawn the background maintenance tasks. One loop reconciles, audits solvency,
+/// and purges stale invoices on an interval; a second (if a backup dir is set)
+/// snapshots the ledger. Both are best-effort and never touch the request path.
+fn spawn_maintenance(
+    cfg: &config::Config,
+    tapd: tapd::TapdClient,
+    registry: Arc<registry::Registry>,
+) {
+    if cfg.reconcile_interval_secs > 0 {
+        let period = Duration::from_secs(cfg.reconcile_interval_secs.max(5));
+        let ttl = cfg.ln_receive_ttl_secs as i64;
+        let mut tapd = tapd.clone();
+        let registry = registry.clone();
+        tokio::spawn(async move {
+            let mut tick = tokio::time::interval(period);
+            tick.tick().await; // consume the immediate first tick
+            loop {
+                tick.tick().await;
+                reconcile::reconcile_all(&mut tapd, &registry).await;
+                if let Err(e) = reconcile::audit_solvency(&mut tapd, &registry).await {
+                    log::warn!("solvency audit: {e}");
+                }
+                if ttl > 0 {
+                    let cutoff = auth::now_secs() as i64 - ttl;
+                    match registry.purge_stale_ln_receives(cutoff) {
+                        Ok(n) if n > 0 => log::info!("purged {n} stale ln invoice(s)"),
+                        Ok(_) => {}
+                        Err(e) => log::warn!("purge stale ln invoices: {e}"),
+                    }
+                }
+            }
+        });
+    }
+
+    if let Some(dir) = cfg.backup_dir.clone() {
+        let period = Duration::from_secs(cfg.backup_interval_secs.max(60));
+        let retention = cfg.backup_retention;
+        let key = cfg.backup_key.as_ref().map(|k| k.0);
+        if key.is_none() {
+            log::warn!(
+                "ledger backups enabled WITHOUT encryption (set OZARK_GATEWAY_BACKUP_KEY); \
+                 snapshots written in the clear to {}",
+                dir.display()
+            );
+        }
+        tokio::spawn(async move {
+            let mut tick = tokio::time::interval(period);
+            loop {
+                tick.tick().await; // first tick fires immediately -> snapshot at boot
+                let registry = registry.clone();
+                let dir = dir.clone();
+                let res = tokio::task::spawn_blocking(move || {
+                    backup::run_backup(&registry, &dir, retention, key.as_ref())
+                })
+                .await;
+                match res {
+                    Ok(Ok(path)) => log::info!("ledger snapshot written: {}", path.display()),
+                    Ok(Err(e)) => log::error!("ledger backup failed: {e}"),
+                    Err(e) => log::error!("ledger backup task panicked: {e}"),
+                }
+            }
+        });
+    }
 }
 
 /// Resolve on Ctrl-C / SIGTERM so systemd/docker can stop the gateway cleanly.

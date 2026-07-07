@@ -568,10 +568,11 @@ impl TapdClient {
         })
     }
 
-    /// Whether the invoice with hex payment hash `r_hash` has **settled**. Uses
-    /// lnd's `LookupInvoice` (needs an lnd macaroon — see `connect`). A pending,
-    /// canceled, or not-yet-known invoice returns `false`.
-    pub async fn lookup_invoice_settled(&mut self, r_hash: &str) -> Result<bool, String> {
+    /// The state of the invoice with hex payment hash `r_hash`, as an
+    /// `lnrpc::invoice::InvoiceState` discriminant (OPEN=0, SETTLED=1, CANCELED=2,
+    /// ACCEPTED=3). Uses lnd's `LookupInvoice` (needs an lnd macaroon — see
+    /// `connect`). The reconciler credits on SETTLED and drops on CANCELED.
+    pub async fn lookup_invoice_state(&mut self, r_hash: &str) -> Result<i32, String> {
         let r_hash = hex::decode(r_hash).map_err(|e| format!("invalid r_hash: {e}"))?;
         let inv = self
             .lightning
@@ -582,7 +583,7 @@ impl TapdClient {
             .await
             .map_err(|e| format!("lookup_invoice: {e}"))?
             .into_inner();
-        Ok(inv.state == lnrpc::invoice::InvoiceState::Settled as i32)
+        Ok(inv.state)
     }
 
     /// The node's currently-accepted RFQ quote counts (buy/sell). Read-only.
