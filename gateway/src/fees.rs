@@ -15,6 +15,9 @@ pub struct FeeQuote {
     pub margin_sats: u64,
     /// What the user is actually charged (network + margin).
     pub total_sats: u64,
+    /// Whether this node actually debits the fee. When false, `total_sats` is a
+    /// display-only estimate and nothing is charged — the client should say so.
+    pub charged: bool,
 }
 
 /// Fee parameters, derived from config.
@@ -51,6 +54,7 @@ impl FeePolicy {
             network_sats: network,
             margin_sats: margin,
             total_sats: network.saturating_add(margin),
+            charged: self.charge,
         }
     }
 }
@@ -84,6 +88,16 @@ mod tests {
             (q.network_sats, q.margin_sats, q.total_sats),
             (2000, 200, 2200)
         );
+        assert!(q.charged); // policy() has charge = true
+
+        // A node with fees off still quotes an estimate but flags it not charged.
+        let off = FeePolicy {
+            charge: false,
+            ..policy()
+        };
+        let q = off.quote("send", 10);
+        assert_eq!(q.total_sats, 2200);
+        assert!(!q.charged);
     }
 
     #[test]

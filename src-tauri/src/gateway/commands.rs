@@ -302,6 +302,54 @@ pub async fn gateway_transfer(
         .await
 }
 
+// ---- Custodial sats balance (funds on-chain operation fees) ----
+
+/// The caller's custodial sats balance, in sats. Used to cover the operator fee on
+/// chargeable on-chain ops (mint/send) when the node charges fees.
+#[command]
+pub async fn gateway_sats_balance(
+    state: State<'_, WalletState>,
+    app_handle: AppHandle,
+) -> Result<Value, String> {
+    client(&state, &app_handle)
+        .await?
+        .get("/v1/sats/balance")
+        .await
+}
+
+/// Create a Lightning invoice to top up the caller's sats balance by `amount_sats`.
+/// Returns `{ payment_request, r_hash }`; the balance is credited once the invoice
+/// settles (reconciled by the gateway via LookupInvoice).
+#[command]
+pub async fn gateway_sats_deposit(
+    state: State<'_, WalletState>,
+    app_handle: AppHandle,
+    amount_sats: u64,
+) -> Result<Value, String> {
+    let body = json!({ "amount_sats": amount_sats });
+    client(&state, &app_handle)
+        .await?
+        .post("/v1/sats/deposit", body)
+        .await
+}
+
+/// Quote the sats fee for a chargeable op (`"mint"` or `"send"`) before performing
+/// it. Returns `{ network_sats, margin_sats, total_sats }`. Charged nothing when the
+/// node runs with fees off (the quote is still an estimate for display).
+#[command]
+pub async fn gateway_fee_quote(
+    state: State<'_, WalletState>,
+    app_handle: AppHandle,
+    op: String,
+    fee_rate_sat_vb: Option<u32>,
+) -> Result<Value, String> {
+    let mut path = format!("/v1/fee/quote?op={}", op.trim());
+    if let Some(rate) = fee_rate_sat_vb {
+        path.push_str(&format!("&fee_rate_sat_vb={rate}"));
+    }
+    client(&state, &app_handle).await?.get(&path).await
+}
+
 // ---- Operator (admin) — requires this wallet to be the node's operator (either
 // the gateway's OZARK_GATEWAY_ADMIN_PUBKEY, or claimed via gateway_admin_claim).
 
