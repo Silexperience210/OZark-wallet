@@ -36,6 +36,7 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/ln/decode", get(ln_decode))
         .route("/v1/ln/rfq-quotes", get(ln_rfq_quotes))
         .route("/v1/ln/pay", post(ln_pay))
+        .route("/v1/ln/receive", post(ln_receive))
         .route("/v1/mint", post(mint))
         .route("/v1/mint/status", get(mint_status))
         .route("/v1/receive", post(receive))
@@ -403,6 +404,69 @@ async fn ln_pay(
             Err(GatewayError::Upstream(e))
         }
     }
+}
+
+#[derive(Debug, Deserialize)]
+struct LnReceiveRequest {
+    asset_id: String,
+    asset_amount: u64,
+    #[serde(default)]
+    peer_pubkey: Option<String>,
+    #[serde(default)]
+    memo: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct LnReceiveResponse {
+    /// BOLT11 payment request to hand to the payer.
+    payment_request: String,
+    /// Hex payment hash; reconciliation credits the caller once it settles.
+    r_hash: String,
+}
+
+/// Create a Lightning **asset** invoice for the caller. On settlement,
+/// reconciliation (via lnd `LookupInvoice`) credits the caller's ledger balance —
+/// mirroring on-chain receive. Requires an open asset channel + a quoting peer;
+/// auto-credit additionally needs the gateway's lnd macaroon (see deploy docs).
+async fn ln_receive(
+    State(state): State<AppState>,
+    method: Method,
+    uri: Uri,
+    headers: HeaderMap,
+    body: Bytes,
+) -> GatewayResult<Json<LnReceiveResponse>> {
+    let pubkey = auth_body(&state, &headers, &method, &uri, &body)?;
+    let req: LnReceiveRequest = serde_json::from_slice(&body)
+        .map_err(|e| GatewayError::BadRequest(format!("invalid ln receive body: {e}")))?;
+    let asset_id = req.asset_id.trim();
+    if asset_id.is_empty() {
+        return Err(GatewayError::BadRequest("asset_id is required".into()));
+    }
+    if req.asset_amount == 0 {
+        return Err(GatewayError::BadRequest("asset_amount must be > 0".into()));
+    }
+
+    let mut tapd = state.tapd.clone();
+    let created = tapd
+        .create_asset_invoice(
+            asset_id,
+            req.asset_amount,
+            req.peer_pubkey.as_deref().unwrap_or(""),
+            req.memo.as_deref().unwrap_or(""),
+        )
+        .await
+        .map_err(GatewayError::Upstream)?;
+    state.registry.add_pending_ln_receive(
+        &created.r_hash,
+        asset_id,
+        &pubkey,
+        req.asset_amount,
+        now_secs() as i64,
+    )?;
+    Ok(Json(LnReceiveResponse {
+        payment_request: created.payment_request,
+        r_hash: created.r_hash,
+    }))
 }
 
 #[derive(Debug, Deserialize)]

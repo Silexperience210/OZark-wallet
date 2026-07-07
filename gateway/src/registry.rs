@@ -25,6 +25,7 @@ pub mod event_kind {
     pub const RECEIVE: &str = "receive";
     pub const SEND: &str = "send";
     pub const LN_SEND: &str = "ln_send";
+    pub const LN_RECEIVE: &str = "ln_receive";
     pub const BURN: &str = "burn";
     pub const TRANSFER_IN: &str = "transfer_in";
     pub const TRANSFER_OUT: &str = "transfer_out";
@@ -64,6 +65,16 @@ pub struct PendingMint {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PendingReceive {
     pub addr: String,
+    pub asset_id: String,
+    pub pubkey: String,
+    pub amount: u64,
+}
+
+/// A Lightning-asset invoice awaiting settlement to credit. Keyed by the invoice's
+/// hex payment hash, which reconciliation polls via lnd's `LookupInvoice`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PendingLnReceive {
+    pub r_hash: String,
     pub asset_id: String,
     pub pubkey: String,
     pub amount: u64,
@@ -134,6 +145,15 @@ impl Registry {
              -- Receive addresses awaiting an incoming transfer, to credit on confirm.
              CREATE TABLE IF NOT EXISTS pending_receives (
                  addr       TEXT PRIMARY KEY,
+                 asset_id   TEXT NOT NULL,
+                 pubkey     TEXT NOT NULL,
+                 amount     INTEGER NOT NULL,
+                 created_at INTEGER NOT NULL
+             );
+             -- Lightning-asset invoices awaiting settlement, to credit on settle.
+             -- Keyed by the invoice's hex payment hash (polled via LookupInvoice).
+             CREATE TABLE IF NOT EXISTS pending_ln_receives (
+                 r_hash     TEXT PRIMARY KEY,
                  asset_id   TEXT NOT NULL,
                  pubkey     TEXT NOT NULL,
                  amount     INTEGER NOT NULL,
@@ -447,6 +467,82 @@ impl Registry {
         Ok(true)
     }
 
+    // ---- Pending Lightning receives ---------------------------------------
+
+    /// Record a Lightning-asset invoice awaiting settlement for `pubkey`, keyed by
+    /// its hex payment hash. Idempotent on the hash (re-issuing is a no-op).
+    pub fn add_pending_ln_receive(
+        &self,
+        r_hash: &str,
+        asset_id: &str,
+        pubkey: &str,
+        amount: u64,
+        created_at: i64,
+    ) -> Result<(), RegistryError> {
+        let conn = self.lock();
+        conn.execute(
+            "INSERT OR IGNORE INTO pending_ln_receives
+                 (r_hash, asset_id, pubkey, amount, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            (r_hash, asset_id, pubkey, amount as i64, created_at),
+        )?;
+        Ok(())
+    }
+
+    /// All Lightning-asset invoices still awaiting settlement.
+    pub fn pending_ln_receives(&self) -> Result<Vec<PendingLnReceive>, RegistryError> {
+        let conn = self.lock();
+        let mut stmt = conn.prepare(
+            "SELECT r_hash, asset_id, pubkey, amount
+             FROM pending_ln_receives ORDER BY created_at",
+        )?;
+        let rows = stmt.query_map([], |r| {
+            Ok(PendingLnReceive {
+                r_hash: r.get(0)?,
+                asset_id: r.get(1)?,
+                pubkey: r.get(2)?,
+                amount: r.get::<_, i64>(3)? as u64,
+            })
+        })?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(Into::into)
+    }
+
+    /// Credit a settled Lightning-asset invoice to its recipient and drop the
+    /// pending row, atomically. Returns whether a pending invoice was resolved.
+    pub fn resolve_ln_receive(&self, r_hash: &str) -> Result<bool, RegistryError> {
+        let mut conn = self.lock();
+        let tx = conn.transaction()?;
+        let row: Option<(String, String, i64)> = tx
+            .query_row(
+                "SELECT asset_id, pubkey, amount FROM pending_ln_receives WHERE r_hash = ?1",
+                [r_hash],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .optional()?;
+        let Some((asset_id, pubkey, amount)) = row else {
+            return Ok(false);
+        };
+        let credited = amount.max(0) as u64;
+        credit_conn(&tx, &asset_id, &pubkey, credited)?;
+        record_event_conn(
+            &tx,
+            &pubkey,
+            &asset_id,
+            event_kind::LN_RECEIVE,
+            credited,
+            None,
+            Some(r_hash),
+            crate::auth::now_secs() as i64,
+        )?;
+        tx.execute(
+            "DELETE FROM pending_ln_receives WHERE r_hash = ?1",
+            [r_hash],
+        )?;
+        tx.commit()?;
+        Ok(true)
+    }
+
     // ---- History ----------------------------------------------------------
 
     /// Append a history event for `pubkey`. Used by the route layer for actions
@@ -698,6 +794,31 @@ mod tests {
         // Resolving again is a no-op (idempotent — pending row is gone).
         assert!(!r.resolve_receive("taddr1").unwrap());
         assert_eq!(r.balance_of("X", BOB).unwrap(), 250);
+    }
+
+    #[test]
+    fn ln_receive_resolves_credits_and_records_history() {
+        let r = reg();
+        r.add_pending_ln_receive("deadbeef", "X", BOB, 75, 1)
+            .unwrap();
+        // Re-issuing the same hash is idempotent (no duplicate pending row).
+        r.add_pending_ln_receive("deadbeef", "X", BOB, 75, 1)
+            .unwrap();
+        assert_eq!(r.pending_ln_receives().unwrap().len(), 1);
+
+        assert!(r.resolve_ln_receive("deadbeef").unwrap());
+        assert_eq!(r.balance_of("X", BOB).unwrap(), 75);
+        assert!(r.pending_ln_receives().unwrap().is_empty());
+        // Idempotent once resolved (pending row is gone).
+        assert!(!r.resolve_ln_receive("deadbeef").unwrap());
+        assert_eq!(r.balance_of("X", BOB).unwrap(), 75);
+
+        // History carries an ln_receive event referencing the payment hash.
+        let ev = r.history(BOB, 50).unwrap();
+        assert_eq!(ev.len(), 1);
+        assert_eq!(ev[0].kind, event_kind::LN_RECEIVE);
+        assert_eq!(ev[0].amount, 75);
+        assert_eq!(ev[0].reference.as_deref(), Some("deadbeef"));
     }
 
     #[test]

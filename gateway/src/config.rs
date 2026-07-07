@@ -18,6 +18,12 @@ pub struct Config {
     pub tapd_cert_path: PathBuf,
     /// Path to the tapd macaroon (raw bytes) authorizing gRPC calls.
     pub tapd_macaroon_path: PathBuf,
+    /// Optional path to an **lnd** macaroon (raw bytes) with `invoices:read`.
+    /// Needed only for Lightning-asset receive (`/v1/ln/receive`) to detect
+    /// invoice settlement via lnd's `LookupInvoice` — the tapd macaroon does not
+    /// authorize lnd RPCs. When absent, LN receive still generates invoices but
+    /// auto-credit is disabled (settlement can't be observed).
+    pub lnd_macaroon_path: Option<PathBuf>,
 
     /// Path to the SQLite ownership registry (created if absent).
     pub db_path: PathBuf,
@@ -40,6 +46,10 @@ impl Config {
         let tapd_host = req("OZARK_GATEWAY_TAPD_HOST")?;
         let tapd_cert_path = PathBuf::from(req("OZARK_GATEWAY_TAPD_CERT")?);
         let tapd_macaroon_path = PathBuf::from(req("OZARK_GATEWAY_TAPD_MACAROON")?);
+        let lnd_macaroon_path = std::env::var("OZARK_GATEWAY_LND_MACAROON")
+            .ok()
+            .filter(|s| !s.trim().is_empty())
+            .map(PathBuf::from);
         let db_path = PathBuf::from(env_or("OZARK_GATEWAY_DB", "ozark-gateway.sqlite"));
         let public_base_url = std::env::var("OZARK_GATEWAY_PUBLIC_URL")
             .ok()
@@ -54,6 +64,7 @@ impl Config {
             tapd_host,
             tapd_cert_path,
             tapd_macaroon_path,
+            lnd_macaroon_path,
             db_path,
             public_base_url,
             max_skew_secs,

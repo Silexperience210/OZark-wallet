@@ -20,6 +20,39 @@ pub async fn reconcile_all(tapd: &mut TapdClient, registry: &Registry) {
     if let Err(e) = reconcile_receives(tapd, registry).await {
         log::warn!("reconcile receives: {e}");
     }
+    if let Err(e) = reconcile_ln_receives(tapd, registry).await {
+        log::warn!("reconcile ln receives: {e}");
+    }
+}
+
+/// Credit settled Lightning-asset invoices to the users that requested them.
+/// Polls lnd's `LookupInvoice` per pending invoice (needs an lnd macaroon — see
+/// `TapdClient::connect`); a single lookup failure is logged and skipped so one
+/// bad hash never stalls the rest. Returns the number newly credited.
+pub async fn reconcile_ln_receives(
+    tapd: &mut TapdClient,
+    registry: &Registry,
+) -> Result<usize, String> {
+    let pending = registry.pending_ln_receives().map_err(|e| e.to_string())?;
+    if pending.is_empty() {
+        return Ok(0);
+    }
+    let mut resolved = 0;
+    for p in pending {
+        match tapd.lookup_invoice_settled(&p.r_hash).await {
+            Ok(true) => {
+                if registry
+                    .resolve_ln_receive(&p.r_hash)
+                    .map_err(|e| e.to_string())?
+                {
+                    resolved += 1;
+                }
+            }
+            Ok(false) => {}
+            Err(e) => log::warn!("lookup_invoice {}: {e}", p.r_hash),
+        }
+    }
+    Ok(resolved)
 }
 
 /// Credit confirmed incoming transfers to the users that generated their receive
