@@ -206,6 +206,30 @@ impl Registry {
             .map_err(Into::into)
     }
 
+    /// Total custodial liability per asset: the sum of every user's positive
+    /// balance, as `(asset_id, total)`. The solvency audit compares this against
+    /// tapd's actual holding — the invariant is `total ≤ node holding`, per asset.
+    pub fn total_liabilities_by_asset(&self) -> Result<Vec<(String, u64)>, RegistryError> {
+        let conn = self.lock();
+        let mut stmt = conn.prepare(
+            "SELECT asset_id, SUM(amount) FROM balances WHERE amount > 0 GROUP BY asset_id",
+        )?;
+        let rows = stmt.query_map([], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?.max(0) as u64))
+        })?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(Into::into)
+    }
+
+    /// Write a consistent snapshot of the ledger to `path` via `VACUUM INTO` (safe
+    /// under WAL, no writer pause). The caller encrypts + rotates the result.
+    pub fn snapshot_to(&self, path: &Path) -> Result<(), RegistryError> {
+        let dest = path.to_string_lossy().to_string();
+        let conn = self.lock();
+        conn.execute("VACUUM INTO ?1", [dest])?;
+        Ok(())
+    }
+
     /// Credit `amount` of `asset_id` to `pubkey`. Used on confirmed mint/receive,
     /// and to refund a failed send/burn.
     pub fn credit(&self, asset_id: &str, pubkey: &str, amount: u64) -> Result<(), RegistryError> {
@@ -543,6 +567,29 @@ impl Registry {
         Ok(true)
     }
 
+    /// Drop a pending Lightning receive **without** crediting — for an invoice that
+    /// was canceled/expired. Returns whether a row was removed.
+    pub fn delete_pending_ln_receive(&self, r_hash: &str) -> Result<bool, RegistryError> {
+        let conn = self.lock();
+        let n = conn.execute(
+            "DELETE FROM pending_ln_receives WHERE r_hash = ?1",
+            [r_hash],
+        )?;
+        Ok(n > 0)
+    }
+
+    /// Purge pending Lightning receives created before `cutoff` (unix secs),
+    /// whatever their state — a safety net for invoices lnd no longer knows about,
+    /// so the poll set can't grow without bound. Returns the number purged.
+    pub fn purge_stale_ln_receives(&self, cutoff: i64) -> Result<usize, RegistryError> {
+        let conn = self.lock();
+        let n = conn.execute(
+            "DELETE FROM pending_ln_receives WHERE created_at < ?1",
+            [cutoff],
+        )?;
+        Ok(n)
+    }
+
     // ---- History ----------------------------------------------------------
 
     /// Append a history event for `pubkey`. Used by the route layer for actions
@@ -819,6 +866,37 @@ mod tests {
         assert_eq!(ev[0].kind, event_kind::LN_RECEIVE);
         assert_eq!(ev[0].amount, 75);
         assert_eq!(ev[0].reference.as_deref(), Some("deadbeef"));
+    }
+
+    #[test]
+    fn total_liabilities_sums_positive_balances_per_asset() {
+        let r = reg();
+        r.credit("a1", ALICE, 100).unwrap();
+        r.credit("a1", BOB, 50).unwrap();
+        r.credit("a2", ALICE, 7).unwrap();
+        r.credit("a3", BOB, 5).unwrap();
+        r.debit("a3", BOB, 5).unwrap(); // back to zero -> excluded
+        let mut liab = r.total_liabilities_by_asset().unwrap();
+        liab.sort();
+        assert_eq!(liab, vec![("a1".into(), 150), ("a2".into(), 7)]);
+    }
+
+    #[test]
+    fn ln_receive_purge_and_delete_do_not_credit() {
+        let r = reg();
+        r.add_pending_ln_receive("old", "X", ALICE, 10, 100)
+            .unwrap();
+        r.add_pending_ln_receive("new", "X", ALICE, 20, 1000)
+            .unwrap();
+        // Purge everything created before ts=500 -> drops "old" only.
+        assert_eq!(r.purge_stale_ln_receives(500).unwrap(), 1);
+        assert_eq!(r.pending_ln_receives().unwrap().len(), 1);
+        // Explicit delete (canceled) drops "new" without crediting.
+        assert!(r.delete_pending_ln_receive("new").unwrap());
+        assert!(r.pending_ln_receives().unwrap().is_empty());
+        assert_eq!(r.balance_of("X", ALICE).unwrap(), 0);
+        // Idempotent once gone.
+        assert!(!r.delete_pending_ln_receive("new").unwrap());
     }
 
     #[test]

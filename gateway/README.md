@@ -61,8 +61,20 @@ move — atomic, no on-chain transaction, no fee.
 **Async mint:** tapd broadcasts a batch immediately but the asset id only exists
 once the genesis confirms. The gateway holds a pending claim keyed by batch and
 resolves it (crediting the minter) by matching an asset's anchor txid to the batch
-txid. Reconciliation (mints + receives) runs opportunistically on `/v1/assets` and
-`/v1/mint/status`.
+txid. Reconciliation (mints + receives + LN receives) runs opportunistically on
+`/v1/assets` and `/v1/mint/status`, **and** on a background interval
+(`OZARK_GATEWAY_RECONCILE_INTERVAL_SECS`, default 60s) so settlements are credited
+even with no request traffic. The background loop also purges canceled/expired LN
+invoices and runs a **solvency audit**: per asset, the sum of ledger balances is
+compared to tapd's actual holding, logging an `error!` on any drift (the invariant
+that liabilities never exceed holdings).
+
+**Backups:** the SQLite ledger IS the custody record — losing it means tapd still
+holds the assets but attribution is gone. Set `OZARK_GATEWAY_BACKUP_DIR` (+ a
+32-byte hex `OZARK_GATEWAY_BACKUP_KEY`) to take periodic consistent snapshots
+(`VACUUM INTO`), encrypted at rest with XChaCha20-Poly1305, retained
+`OZARK_GATEWAY_BACKUP_RETENTION` deep. Ship them off-box for real disaster
+recovery.
 
 Not yet: Taproot-assets-over-Lightning, pay-to-mint, and rewiring the app to the
 gateway. See `../.claude` memory `ozark-marketplace` for the full roadmap.

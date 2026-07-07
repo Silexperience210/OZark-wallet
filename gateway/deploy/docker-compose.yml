@@ -31,9 +31,20 @@ services:
       # Optional: set to http://<onion>.onion after first boot for strict URL
       # binding. Left empty, auth still binds each token to its endpoint (path-only).
       OZARK_GATEWAY_PUBLIC_URL: ${OZARK_GATEWAY_PUBLIC_URL:-}
+      # Background maintenance interval (reconcile + solvency audit + invoice
+      # purge), seconds. 0 disables the loop (per-request reconcile still runs).
+      OZARK_GATEWAY_RECONCILE_INTERVAL_SECS: ${OZARK_GATEWAY_RECONCILE_INTERVAL_SECS:-60}
+      # Encrypted ledger backups (recommended — the ledger IS the custody record).
+      # Set DIR to /backups and KEY to a 32-byte hex secret to enable + encrypt.
+      # Left empty = disabled. Without KEY, snapshots are written in the clear.
+      OZARK_GATEWAY_BACKUP_DIR: ${OZARK_GATEWAY_BACKUP_DIR:-}
+      OZARK_GATEWAY_BACKUP_KEY: ${OZARK_GATEWAY_BACKUP_KEY:-}
     volumes:
       - ./secrets:/secrets:ro
       - gateway-data:/data
+      # Ledger snapshots land here when OZARK_GATEWAY_BACKUP_DIR=/backups. On the
+      # host filesystem so you can ship them off-box (real DR needs off-box copies).
+      - ./backups:/backups
     # Optional: attach to your node's docker network so `litd` resolves by name.
     # networks: [umbrel_main_network]
 

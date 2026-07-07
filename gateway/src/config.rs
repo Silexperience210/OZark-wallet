@@ -6,6 +6,17 @@
 
 use std::path::PathBuf;
 
+/// A 32-byte secret whose `Debug` never reveals its bytes (so a `Config` dump
+/// can't leak the backup key into logs).
+#[derive(Clone)]
+pub struct RedactedKey(pub [u8; 32]);
+
+impl std::fmt::Debug for RedactedKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("RedactedKey(<32 bytes>)")
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Config {
     /// TCP address the HTTP server binds to. On Umbrel the system Tor daemon
@@ -36,6 +47,25 @@ pub struct Config {
 
     /// Max allowed clock skew (seconds) between the NIP-98 event and now.
     pub max_skew_secs: u64,
+
+    /// How often the background maintenance loop runs reconciliation + the
+    /// solvency audit + pending-invoice purge, in seconds. `0` disables the loop
+    /// (reconciliation still runs opportunistically on requests). Default 60.
+    pub reconcile_interval_secs: u64,
+    /// Pending Lightning-receive invoices older than this (seconds) are purged
+    /// even if never observed (e.g. lnd forgot them). Default 86400 (24h).
+    pub ln_receive_ttl_secs: u64,
+
+    /// Directory for ledger snapshots (the ledger IS the custody record). `None`
+    /// disables backups. Should be a volume separate from the live DB.
+    pub backup_dir: Option<PathBuf>,
+    /// How often to snapshot the ledger, in seconds. Default 3600 (1h).
+    pub backup_interval_secs: u64,
+    /// How many snapshots to keep; older ones are pruned. Default 24.
+    pub backup_retention: usize,
+    /// 32-byte key (hex) to encrypt snapshots with XChaCha20-Poly1305. When unset
+    /// but a backup dir is configured, snapshots are written in the clear (warned).
+    pub backup_key: Option<RedactedKey>,
 }
 
 impl Config {
@@ -59,6 +89,26 @@ impl Config {
             .and_then(|s| s.parse().ok())
             .unwrap_or(60);
 
+        let reconcile_interval_secs = env_u64("OZARK_GATEWAY_RECONCILE_INTERVAL_SECS", 60);
+        let ln_receive_ttl_secs = env_u64("OZARK_GATEWAY_LN_RECEIVE_TTL_SECS", 86_400);
+        let backup_dir = std::env::var("OZARK_GATEWAY_BACKUP_DIR")
+            .ok()
+            .filter(|s| !s.trim().is_empty())
+            .map(PathBuf::from);
+        let backup_interval_secs = env_u64("OZARK_GATEWAY_BACKUP_INTERVAL_SECS", 3_600);
+        let backup_retention = env_u64("OZARK_GATEWAY_BACKUP_RETENTION", 24) as usize;
+        let backup_key = match std::env::var("OZARK_GATEWAY_BACKUP_KEY") {
+            Ok(s) if !s.trim().is_empty() => {
+                let bytes = hex::decode(s.trim())
+                    .map_err(|e| format!("OZARK_GATEWAY_BACKUP_KEY must be hex: {e}"))?;
+                let arr: [u8; 32] = bytes.try_into().map_err(|_| {
+                    "OZARK_GATEWAY_BACKUP_KEY must be 32 bytes (64 hex chars)".to_string()
+                })?;
+                Some(RedactedKey(arr))
+            }
+            _ => None,
+        };
+
         Ok(Self {
             listen_addr,
             tapd_host,
@@ -68,8 +118,21 @@ impl Config {
             db_path,
             public_base_url,
             max_skew_secs,
+            reconcile_interval_secs,
+            ln_receive_ttl_secs,
+            backup_dir,
+            backup_interval_secs,
+            backup_retention,
+            backup_key,
         })
     }
+}
+
+fn env_u64(key: &str, default: u64) -> u64 {
+    std::env::var(key)
+        .ok()
+        .and_then(|s| s.trim().parse().ok())
+        .unwrap_or(default)
 }
 
 fn req(key: &str) -> Result<String, String> {
