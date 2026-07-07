@@ -80,6 +80,21 @@ pub struct PendingLnReceive {
     pub amount: u64,
 }
 
+/// A debited-but-unresolved payment (send / ln_send). Recovery matches these
+/// against the node's real state after a crash. `reference` is the LN payment hash
+/// (ln_send) — recovery tracks it via `TrackPaymentV2`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InFlight {
+    pub id: i64,
+    pub kind: String,
+    pub pubkey: String,
+    pub asset_id: String,
+    pub amount: u64,
+    pub reference: Option<String>,
+    pub counterparty: Option<String>,
+    pub created_at: i64,
+}
+
 /// One entry in a user's transaction history — the custodial analog of tapd's
 /// node-global transfer list, but scoped to a single user via the ledger. Every
 /// balance-affecting action appends one (transfers append two: out + in).
@@ -158,6 +173,21 @@ impl Registry {
                  pubkey     TEXT NOT NULL,
                  amount     INTEGER NOT NULL,
                  created_at INTEGER NOT NULL
+             );
+             -- Durable record of a payment that has been DEBITED but whose outcome
+             -- is not yet known (send / ln_send). Written atomically with the debit
+             -- BEFORE the tapd/lnd call; cleared on the terminal outcome (settle =
+             -- record history, refund = credit back). A crash mid-payment therefore
+             -- leaves a recoverable row instead of a silent debit.
+             CREATE TABLE IF NOT EXISTS in_flight (
+                 id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                 kind         TEXT NOT NULL,
+                 pubkey       TEXT NOT NULL,
+                 asset_id     TEXT NOT NULL,
+                 amount       INTEGER NOT NULL,
+                 reference    TEXT,
+                 counterparty TEXT,
+                 created_at   INTEGER NOT NULL
              );
              -- Per-user transaction history. Append-only; one row per balance move
              -- (transfers append two: transfer_out for the sender, transfer_in for
@@ -590,6 +620,137 @@ impl Registry {
         Ok(n)
     }
 
+    // ---- In-flight payments (crash recovery) ------------------------------
+
+    /// Atomically debit `pubkey` **and** record the payment as in-flight, so a
+    /// crash before the tapd/lnd call resolves can be recovered (never a silent
+    /// debit). Errors (incl. insufficient balance) roll back both. Returns the
+    /// in-flight row id to resolve with `settle_in_flight` / `refund_in_flight`.
+    #[allow(clippy::too_many_arguments)]
+    pub fn debit_and_mark_in_flight(
+        &self,
+        kind: &str,
+        asset_id: &str,
+        pubkey: &str,
+        amount: u64,
+        reference: Option<&str>,
+        counterparty: Option<&str>,
+        created_at: i64,
+    ) -> Result<i64, RegistryError> {
+        let mut conn = self.lock();
+        let tx = conn.transaction()?;
+        debit_conn(&tx, asset_id, pubkey, amount)?;
+        tx.execute(
+            "INSERT INTO in_flight
+                 (kind, pubkey, asset_id, amount, reference, counterparty, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            (
+                kind,
+                pubkey,
+                asset_id,
+                amount as i64,
+                reference,
+                counterparty,
+                created_at,
+            ),
+        )?;
+        let id = tx.last_insert_rowid();
+        tx.commit()?;
+        Ok(id)
+    }
+
+    /// Resolve an in-flight payment as **succeeded**: record its history event
+    /// (kind/counterparty from the row; `reference_override` wins when given, e.g.
+    /// the on-chain txid learned only after the send) and drop the row, atomically.
+    /// Returns whether a row was resolved.
+    #[allow(clippy::type_complexity)]
+    pub fn settle_in_flight(
+        &self,
+        id: i64,
+        reference_override: Option<&str>,
+    ) -> Result<bool, RegistryError> {
+        let mut conn = self.lock();
+        let tx = conn.transaction()?;
+        let row: Option<(String, String, String, i64, Option<String>, Option<String>)> = tx
+            .query_row(
+                "SELECT kind, pubkey, asset_id, amount, counterparty, reference
+                 FROM in_flight WHERE id = ?1",
+                [id],
+                |r| {
+                    Ok((
+                        r.get(0)?,
+                        r.get(1)?,
+                        r.get(2)?,
+                        r.get(3)?,
+                        r.get(4)?,
+                        r.get(5)?,
+                    ))
+                },
+            )
+            .optional()?;
+        let Some((kind, pubkey, asset_id, amount, counterparty, reference)) = row else {
+            return Ok(false);
+        };
+        let reference = reference_override.map(|s| s.to_string()).or(reference);
+        record_event_conn(
+            &tx,
+            &pubkey,
+            &asset_id,
+            &kind,
+            amount.max(0) as u64,
+            counterparty.as_deref(),
+            reference.as_deref(),
+            crate::auth::now_secs() as i64,
+        )?;
+        tx.execute("DELETE FROM in_flight WHERE id = ?1", [id])?;
+        tx.commit()?;
+        Ok(true)
+    }
+
+    /// Resolve an in-flight payment as **failed**: credit the reserved amount back
+    /// and drop the row, atomically. Returns whether a row was resolved.
+    pub fn refund_in_flight(&self, id: i64) -> Result<bool, RegistryError> {
+        let mut conn = self.lock();
+        let tx = conn.transaction()?;
+        let row: Option<(String, String, i64)> = tx
+            .query_row(
+                "SELECT pubkey, asset_id, amount FROM in_flight WHERE id = ?1",
+                [id],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .optional()?;
+        let Some((pubkey, asset_id, amount)) = row else {
+            return Ok(false);
+        };
+        credit_conn(&tx, &asset_id, &pubkey, amount.max(0) as u64)?;
+        tx.execute("DELETE FROM in_flight WHERE id = ?1", [id])?;
+        tx.commit()?;
+        Ok(true)
+    }
+
+    /// All unresolved in-flight payments, oldest first — the recovery work set.
+    pub fn in_flight_entries(&self) -> Result<Vec<InFlight>, RegistryError> {
+        let conn = self.lock();
+        let mut stmt = conn.prepare(
+            "SELECT id, kind, pubkey, asset_id, amount, reference, counterparty, created_at
+             FROM in_flight ORDER BY id",
+        )?;
+        let rows = stmt.query_map([], |r| {
+            Ok(InFlight {
+                id: r.get(0)?,
+                kind: r.get(1)?,
+                pubkey: r.get(2)?,
+                asset_id: r.get(3)?,
+                amount: r.get::<_, i64>(4)? as u64,
+                reference: r.get(5)?,
+                counterparty: r.get(6)?,
+                created_at: r.get(7)?,
+            })
+        })?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(Into::into)
+    }
+
     // ---- History ----------------------------------------------------------
 
     /// Append a history event for `pubkey`. Used by the route layer for actions
@@ -897,6 +1058,77 @@ mod tests {
         assert_eq!(r.balance_of("X", ALICE).unwrap(), 0);
         // Idempotent once gone.
         assert!(!r.delete_pending_ln_receive("new").unwrap());
+    }
+
+    #[test]
+    fn in_flight_settle_records_history_and_keeps_debit() {
+        let r = reg();
+        r.credit("X", ALICE, 100).unwrap();
+        let id = r
+            .debit_and_mark_in_flight(
+                event_kind::LN_SEND,
+                "X",
+                ALICE,
+                40,
+                Some("hash1"),
+                Some("dest"),
+                1,
+            )
+            .unwrap();
+        assert_eq!(r.balance_of("X", ALICE).unwrap(), 60);
+        assert_eq!(r.in_flight_entries().unwrap().len(), 1);
+
+        assert!(r.settle_in_flight(id, None).unwrap());
+        assert!(r.in_flight_entries().unwrap().is_empty());
+        assert_eq!(r.balance_of("X", ALICE).unwrap(), 60); // stays debited
+        let ev = r.history(ALICE, 10).unwrap();
+        assert_eq!(ev[0].kind, event_kind::LN_SEND);
+        assert_eq!(ev[0].amount, 40);
+        assert_eq!(ev[0].reference.as_deref(), Some("hash1"));
+        assert_eq!(ev[0].counterparty.as_deref(), Some("dest"));
+        // Idempotent once resolved.
+        assert!(!r.settle_in_flight(id, None).unwrap());
+    }
+
+    #[test]
+    fn in_flight_settle_reference_override_wins() {
+        let r = reg();
+        r.credit("X", ALICE, 100).unwrap();
+        let id = r
+            .debit_and_mark_in_flight(event_kind::SEND, "X", ALICE, 10, None, Some("taddr"), 1)
+            .unwrap();
+        r.settle_in_flight(id, Some("txid123")).unwrap();
+        let ev = r.history(ALICE, 10).unwrap();
+        assert_eq!(ev[0].kind, event_kind::SEND);
+        assert_eq!(ev[0].reference.as_deref(), Some("txid123"));
+        assert_eq!(ev[0].counterparty.as_deref(), Some("taddr"));
+    }
+
+    #[test]
+    fn in_flight_refund_restores_balance_without_history() {
+        let r = reg();
+        r.credit("X", ALICE, 100).unwrap();
+        let id = r
+            .debit_and_mark_in_flight(event_kind::LN_SEND, "X", ALICE, 40, Some("h"), None, 1)
+            .unwrap();
+        assert_eq!(r.balance_of("X", ALICE).unwrap(), 60);
+        assert!(r.refund_in_flight(id).unwrap());
+        assert_eq!(r.balance_of("X", ALICE).unwrap(), 100);
+        assert!(r.in_flight_entries().unwrap().is_empty());
+        assert!(r.history(ALICE, 10).unwrap().is_empty());
+        assert!(!r.refund_in_flight(id).unwrap()); // idempotent
+    }
+
+    #[test]
+    fn in_flight_debit_insufficient_rolls_back_both() {
+        let r = reg();
+        r.credit("X", ALICE, 10).unwrap();
+        let err = r
+            .debit_and_mark_in_flight(event_kind::SEND, "X", ALICE, 50, None, None, 1)
+            .unwrap_err();
+        assert!(matches!(err, RegistryError::InsufficientBalance { .. }));
+        assert_eq!(r.balance_of("X", ALICE).unwrap(), 10);
+        assert!(r.in_flight_entries().unwrap().is_empty());
     }
 
     #[test]

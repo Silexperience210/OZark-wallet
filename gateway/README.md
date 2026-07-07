@@ -69,6 +69,15 @@ invoices and runs a **solvency audit**: per asset, the sum of ledger balances is
 compared to tapd's actual holding, logging an `error!` on any drift (the invariant
 that liabilities never exceed holdings).
 
+**Crash recovery:** `send`/`ln_pay` reserve the balance **and** write a durable
+`in_flight` row in one transaction *before* the node call, so a crash mid-payment
+leaves a recoverable record instead of a silent debit. On the terminal outcome the
+row is settled (history recorded) or refunded. On boot + each maintenance pass,
+`recover_in_flight` resolves any leftovers: **LN** payments are tracked via lnd's
+`TrackPaymentV2` (SUCCEEDED keeps the debit, FAILED refunds); **on-chain** sends
+are never auto-refunded (the tx may have broadcast — that would double-spend
+custody) and are surfaced for manual review.
+
 **Backups:** the SQLite ledger IS the custody record — losing it means tapd still
 holds the assets but attribution is gone. Set `OZARK_GATEWAY_BACKUP_DIR` (+ a
 32-byte hex `OZARK_GATEWAY_BACKUP_KEY`) to take periodic consistent snapshots

@@ -76,6 +76,7 @@ type TapChannelClient = tapchannelrpc::taproot_asset_channels_client::TaprootAss
 >;
 type RfqClient = rfqrpc::rfq_client::RfqClient<InterceptedService<Channel, Macaroon>>;
 type LndClient = lnrpc::lightning_client::LightningClient<InterceptedService<Channel, Macaroon>>;
+type RouterClient = routerrpc::router_client::RouterClient<InterceptedService<Channel, Macaroon>>;
 
 /// Injects the tapd macaroon into every gRPC request's metadata.
 #[derive(Clone)]
@@ -106,6 +107,9 @@ pub struct TapdClient {
     /// LN-asset receive settlement. Authorized by a separate lnd macaroon when one
     /// is provided (the tapd macaroon does not cover lnd RPCs); see `connect`.
     lightning: LndClient,
+    /// lnd's `Router` service, used only for `TrackPaymentV2` to recover the
+    /// outcome of an in-flight LN payment after a crash. Same lnd macaroon.
+    router: RouterClient,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -192,6 +196,8 @@ pub struct DecodedAssetInvoice {
     pub sat_amount: i64,
     pub description: String,
     pub destination: String,
+    /// Hex payment hash — used to track the payment's outcome (crash recovery).
+    pub payment_hash: String,
 }
 
 /// Count of the node's currently-accepted RFQ quotes (buy/sell), a cheap health
@@ -273,6 +279,10 @@ impl TapdClient {
         };
         let lightning = lnrpc::lightning_client::LightningClient::with_interceptor(
             channel.clone(),
+            lnd_interceptor.clone(),
+        );
+        let router = routerrpc::router_client::RouterClient::with_interceptor(
+            channel.clone(),
             lnd_interceptor,
         );
         let rfq = rfqrpc::rfq_client::RfqClient::with_interceptor(channel, interceptor);
@@ -283,6 +293,7 @@ impl TapdClient {
             tapchannel,
             rfq,
             lightning,
+            router,
         })
     }
 
@@ -456,15 +467,16 @@ impl TapdClient {
             .await
             .map_err(|e| format!("decode_asset_pay_req: {e}"))?
             .into_inner();
-        let (sat_amount, description, destination) = resp
+        let (sat_amount, description, destination, payment_hash) = resp
             .pay_req
-            .map(|p| (p.num_satoshis, p.description, p.destination))
+            .map(|p| (p.num_satoshis, p.description, p.destination, p.payment_hash))
             .unwrap_or_default();
         Ok(DecodedAssetInvoice {
             asset_amount: resp.asset_amount,
             sat_amount,
             description,
             destination,
+            payment_hash,
         })
     }
 
@@ -584,6 +596,33 @@ impl TapdClient {
             .map_err(|e| format!("lookup_invoice: {e}"))?
             .into_inner();
         Ok(inv.state)
+    }
+
+    /// The terminal status of a (possibly in-flight) LN payment, as an
+    /// `lnrpc::payment::PaymentStatus` discriminant (UNKNOWN=0, IN_FLIGHT=1,
+    /// SUCCEEDED=2, FAILED=3). Uses lnd's `TrackPaymentV2` with
+    /// `no_inflight_updates` so the first streamed message is the settled state.
+    /// Used to recover an in-flight payment's outcome after a crash. Errors if lnd
+    /// has no record of the hash (never initiated) — the caller leaves such an
+    /// entry for manual review rather than risk a wrong refund.
+    pub async fn track_payment(&mut self, payment_hash_hex: &str) -> Result<i32, String> {
+        let payment_hash =
+            hex::decode(payment_hash_hex).map_err(|e| format!("invalid payment hash: {e}"))?;
+        let req = routerrpc::TrackPaymentRequest {
+            payment_hash,
+            no_inflight_updates: true,
+        };
+        let mut stream = self
+            .router
+            .track_payment_v2(req)
+            .await
+            .map_err(|e| format!("track_payment_v2: {e}"))?
+            .into_inner();
+        match stream.message().await {
+            Ok(Some(p)) => Ok(p.status),
+            Ok(None) => Err("track_payment_v2: empty stream".to_string()),
+            Err(e) => Err(format!("track_payment_v2: {e}")),
+        }
     }
 
     /// The node's currently-accepted RFQ quote counts (buy/sell). Read-only.

@@ -370,23 +370,25 @@ async fn ln_pay(
         ));
     }
 
-    // Reserve the caller's balance before paying (403 if insufficient).
-    state.registry.debit(asset_id, &pubkey, amount)?;
+    // Reserve the caller's balance AND record durable in-flight intent atomically
+    // (403 if insufficient) — a crash mid-payment leaves a recoverable row instead
+    // of a silent debit. The payment hash lets recovery track the outcome.
+    let counterparty = (!decoded.destination.is_empty()).then_some(decoded.destination.as_str());
+    let reference = (!decoded.payment_hash.is_empty()).then_some(decoded.payment_hash.as_str());
+    let id = state.registry.debit_and_mark_in_flight(
+        event_kind::LN_SEND,
+        asset_id,
+        &pubkey,
+        amount,
+        reference,
+        counterparty,
+        now_secs() as i64,
+    )?;
 
     let peer = req.peer_pubkey.as_deref().unwrap_or("");
     match tapd.pay_asset_invoice(pay_req, asset_id, peer).await {
         Ok(status) if status == "Succeeded" => {
-            let counterparty =
-                (!decoded.destination.is_empty()).then_some(decoded.destination.as_str());
-            let _ = state.registry.record_event(
-                &pubkey,
-                asset_id,
-                event_kind::LN_SEND,
-                amount,
-                counterparty,
-                None,
-                now_secs() as i64,
-            );
+            let _ = state.registry.settle_in_flight(id, None);
             Ok(Json(LnPayResponse {
                 status,
                 asset_amount: amount,
@@ -394,13 +396,13 @@ async fn ln_pay(
         }
         Ok(status) => {
             // Not settled — refund the reservation.
-            let _ = state.registry.credit(asset_id, &pubkey, amount);
+            let _ = state.registry.refund_in_flight(id);
             Err(GatewayError::Upstream(format!(
                 "payment not completed: {status}"
             )))
         }
         Err(e) => {
-            let _ = state.registry.credit(asset_id, &pubkey, amount);
+            let _ = state.registry.refund_in_flight(id);
             Err(GatewayError::Upstream(e))
         }
     }
@@ -681,34 +683,30 @@ async fn send(
         .await
         .map_err(GatewayError::Upstream)?;
 
-    // Reserve the caller's balance; errors (incl. insufficient) reject before send.
-    state
-        .registry
-        .debit(&decoded.asset_id, &pubkey, decoded.amount)?;
+    // Reserve balance + durable in-flight intent atomically (403 if insufficient),
+    // so a crash mid-send leaves a recoverable row instead of a silent debit.
+    let id = state.registry.debit_and_mark_in_flight(
+        event_kind::SEND,
+        &decoded.asset_id,
+        &pubkey,
+        decoded.amount,
+        None,
+        Some(req.addr.trim()),
+        now_secs() as i64,
+    )?;
 
     match tapd
         .send_asset(req.addr.trim(), req.fee_rate_sat_vb.unwrap_or(0))
         .await
     {
         Ok(txid) => {
-            // Best-effort history: the balance already moved; a failed record must
-            // not fail the send.
-            let _ = state.registry.record_event(
-                &pubkey,
-                &decoded.asset_id,
-                event_kind::SEND,
-                decoded.amount,
-                Some(req.addr.trim()),
-                Some(&txid),
-                now_secs() as i64,
-            );
+            // Settle records the SEND event, stamping the anchor txid as reference.
+            let _ = state.registry.settle_in_flight(id, Some(txid.as_str()));
             Ok(Json(TxResponse { txid }))
         }
         Err(e) => {
             // Refund the reservation so a failed send never loses funds.
-            let _ = state
-                .registry
-                .credit(&decoded.asset_id, &pubkey, decoded.amount);
+            let _ = state.registry.refund_in_flight(id);
             Err(GatewayError::Upstream(e))
         }
     }
