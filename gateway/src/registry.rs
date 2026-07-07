@@ -822,12 +822,6 @@ impl Registry {
         sats_balance_conn(&conn, pubkey)
     }
 
-    /// Credit sats to `pubkey` (deposit settle, or fee refund).
-    pub fn credit_sats(&self, pubkey: &str, amount: u64) -> Result<(), RegistryError> {
-        let conn = self.lock();
-        credit_sats_conn(&conn, pubkey, amount)
-    }
-
     /// Charge a sats fee: debit `payer`, credit `operator`, atomically, recording a
     /// `fee` event for the payer and `fee_earned` for the operator. Errors
     /// (`InsufficientSats`) roll back. Callers skip this when payer == operator.
