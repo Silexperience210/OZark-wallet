@@ -189,6 +189,11 @@ impl Registry {
                  counterparty TEXT,
                  created_at   INTEGER NOT NULL
              );
+             -- Small key/value settings, e.g. the operator pubkey once claimed.
+             CREATE TABLE IF NOT EXISTS settings (
+                 key   TEXT PRIMARY KEY,
+                 value TEXT NOT NULL
+             );
              -- Per-user transaction history. Append-only; one row per balance move
              -- (transfers append two: transfer_out for the sender, transfer_in for
              -- the recipient). Ordered by `id` so display order matches insertion
@@ -751,6 +756,31 @@ impl Registry {
             .map_err(Into::into)
     }
 
+    // ---- Settings (operator claim) ----------------------------------------
+
+    /// The persisted operator pubkey (set via the admin claim), if any.
+    pub fn get_admin_pubkey(&self) -> Result<Option<String>, RegistryError> {
+        let conn = self.lock();
+        conn.query_row(
+            "SELECT value FROM settings WHERE key = 'admin_pubkey'",
+            [],
+            |r| r.get(0),
+        )
+        .optional()
+        .map_err(Into::into)
+    }
+
+    /// Persist the operator pubkey (idempotent overwrite).
+    pub fn set_admin_pubkey(&self, pubkey: &str) -> Result<(), RegistryError> {
+        let conn = self.lock();
+        conn.execute(
+            "INSERT INTO settings (key, value) VALUES ('admin_pubkey', ?1)
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            [pubkey],
+        )?;
+        Ok(())
+    }
+
     // ---- History ----------------------------------------------------------
 
     /// Append a history event for `pubkey`. Used by the route layer for actions
@@ -1129,6 +1159,16 @@ mod tests {
         assert!(matches!(err, RegistryError::InsufficientBalance { .. }));
         assert_eq!(r.balance_of("X", ALICE).unwrap(), 10);
         assert!(r.in_flight_entries().unwrap().is_empty());
+    }
+
+    #[test]
+    fn admin_pubkey_persists_and_overwrites() {
+        let r = reg();
+        assert!(r.get_admin_pubkey().unwrap().is_none());
+        r.set_admin_pubkey("abc123").unwrap();
+        assert_eq!(r.get_admin_pubkey().unwrap().as_deref(), Some("abc123"));
+        r.set_admin_pubkey("def456").unwrap();
+        assert_eq!(r.get_admin_pubkey().unwrap().as_deref(), Some("def456"));
     }
 
     #[test]

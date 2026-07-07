@@ -13,8 +13,11 @@ pub struct AuthConfig {
     pub public_base_url: Option<String>,
     /// Max allowed clock skew (seconds) for the NIP-98 event timestamp.
     pub max_skew_secs: u64,
-    /// Operator pubkey allowed to call `/v1/admin/*`. `None` disables admin routes.
+    /// Operator pubkey allowed to call `/v1/admin/*`. `None` => the admin is a
+    /// prior claim (see registry) or, failing that, admin routes are 403.
     pub admin_pubkey: Option<String>,
+    /// When true, `POST /v1/admin/claim` lets the first caller become operator.
+    pub allow_admin_claim: bool,
 }
 
 #[derive(Clone)]

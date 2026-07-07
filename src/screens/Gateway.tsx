@@ -348,6 +348,18 @@ export function Gateway({ onBack }: GatewayProps) {
     }
   };
 
+  const doClaimOperator = async () => {
+    setBusy(true);
+    try {
+      await invoke("gateway_admin_claim");
+      notify("Tu es désormais l'opérateur de ce nœud ✅", "success");
+    } catch (e) {
+      notify(String(e), "error");
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const doListChannels = async () => {
     setBusy(true);
     try {
@@ -1181,11 +1193,19 @@ export function Gateway({ onBack }: GatewayProps) {
             {opShown && (
               <div style={{ marginTop: 10 }}>
                 <p className="text-muted" style={{ fontSize: 10, marginBottom: 10 }}>
-                  Réservé à l'opérateur du nœud : ta clé (🔑 ci-dessus) doit être définie en{" "}
-                  <code>OZARK_GATEWAY_ADMIN_PUBKEY</code> sur le gateway, sinon 403. Ouvrir un
-                  canal d'asset débloque le routage LN (payer/recevoir).
+                  Réservé à l'opérateur du nœud. Si personne n'est encore opérateur (et que le
+                  nœud autorise le claim), appuie sur « Devenir opérateur » — un tap, aucun hex à
+                  copier. Ouvrir un canal d'asset débloque le routage LN (payer/recevoir).
                 </p>
 
+                <button
+                  className="btn btn-primary"
+                  style={{ width: "100%", marginBottom: 10 }}
+                  onClick={doClaimOperator}
+                  disabled={busy}
+                >
+                  {busy ? <span className="spinner" /> : null} Devenir opérateur de ce nœud
+                </button>
                 <button className="btn btn-ghost" onClick={doListChannels} disabled={busy}>
                   {busy ? <span className="spinner" /> : null} Lister les canaux
                 </button>

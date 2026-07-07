@@ -49,6 +49,7 @@ instant internal transfers. Endpoints:
 | POST   | `/v1/send`            | yes  | send an asset out; **debits the caller** (403 if insufficient) |
 | POST   | `/v1/burn`            | yes  | burn an asset; **debits the caller** |
 | POST   | `/v1/transfer`        | yes  | **instant, free** ledger transfer to another gateway user |
+| POST   | `/v1/admin/claim`     | authed | trust-on-first-use: become operator (needs `OZARK_GATEWAY_ALLOW_ADMIN_CLAIM`, no admin yet) |
 | GET    | `/v1/admin/channels`  | operator | list the node's channels (asset channels included) |
 | POST   | `/v1/admin/channel/open` | operator | open an asset channel to a connected peer (funds LN routing) |
 | POST   | `/v1/admin/peer/connect` | operator | connect to a Lightning peer |
@@ -62,11 +63,18 @@ first and refund if tapd rejects; an insufficient balance is a **403**.
 move — atomic, no on-chain transaction, no fee.
 
 **Operator routes:** `/v1/admin/*` spend the node's OWN liquidity (open asset
-channels, connect peers) so they are gated to a single operator: set
-`OZARK_GATEWAY_ADMIN_PUBKEY` to the operator's Nostr pubkey and the routes require
-a NIP-98 signature by exactly that key (403 otherwise, and disabled entirely when
-unset). Opening an asset channel to a quoting peer is the prerequisite for LN-asset
-pay/receive to route at all.
+channels, connect peers) so they are gated to a single operator: the routes require
+a NIP-98 signature by exactly the operator pubkey (403 otherwise). The operator is
+either `OZARK_GATEWAY_ADMIN_PUBKEY` (explicit) **or** whoever claimed it. Opening an
+asset channel to a quoting peer is the prerequisite for LN-asset pay/receive to
+route at all.
+
+**Operator claim (no hex to copy):** to make setup one-tap, set
+`OZARK_GATEWAY_ALLOW_ADMIN_CLAIM=1` and `POST /v1/admin/claim` from the wallet: the
+first authenticated caller is persisted as the operator (ignored once an operator
+exists). The wallet's "Devenir opérateur" button does this. Turn the flag off after
+claiming. Anyone who can reach the onion could claim while it's on, so only enable
+it during setup.
 
 **Async mint:** tapd broadcasts a batch immediately but the asset id only exists
 once the genesis confirms. The gateway holds a pending claim keyed by batch and
