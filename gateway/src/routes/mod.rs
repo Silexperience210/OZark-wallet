@@ -18,8 +18,8 @@ use crate::reconcile::reconcile_all;
 use crate::registry::{event_kind, LedgerEvent};
 use crate::state::AppState;
 use crate::tapd::{
-    AssetInfo, AssetMeta, DecodedAddr, DecodedAssetInvoice, NodeInfo, RfqQuotes, UniverseRoot,
-    UniverseStats,
+    AssetInfo, AssetMeta, ChannelInfo, DecodedAddr, DecodedAssetInvoice, NodeInfo, RfqQuotes,
+    UniverseRoot, UniverseStats,
 };
 
 pub fn router(state: AppState) -> Router {
@@ -43,6 +43,9 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/send", post(send))
         .route("/v1/burn", post(burn))
         .route("/v1/transfer", post(transfer))
+        .route("/v1/admin/channels", get(admin_channels))
+        .route("/v1/admin/channel/open", post(admin_channel_open))
+        .route("/v1/admin/peer/connect", post(admin_peer_connect))
         .with_state(state)
 }
 
@@ -70,6 +73,22 @@ fn auth_body(
     body: &[u8],
 ) -> GatewayResult<String> {
     Ok(authenticate(&state.auth, headers, method, uri, body)?)
+}
+
+/// Authenticate an **operator** request: a valid NIP-98 signed by exactly the
+/// configured admin pubkey. 403 when no admin is configured or the caller isn't it.
+fn auth_admin(
+    state: &AppState,
+    headers: &HeaderMap,
+    method: &Method,
+    uri: &Uri,
+    body: &[u8],
+) -> GatewayResult<()> {
+    let caller = authenticate(&state.auth, headers, method, uri, body)?.to_lowercase();
+    match &state.auth.admin_pubkey {
+        Some(admin) if *admin == caller => Ok(()),
+        _ => Err(GatewayError::Forbidden("operator only".into())),
+    }
 }
 
 /// One of the caller's holdings: their ledger balance plus tapd metadata.
@@ -806,6 +825,106 @@ async fn transfer(
 
     state.registry.transfer(asset_id, &pubkey, to, req.amount)?;
     Ok(Json(TransferResponse {
+        status: "ok".into(),
+    }))
+}
+
+// ---- Operator (admin) routes ------------------------------------------------
+// Open/list asset channels + connect peers. These spend the node's OWN
+// liquidity, so they are gated to the configured operator pubkey — never exposed
+// to custodial users. This is what makes LN-asset routing possible in the first
+// place (pay/receive only route once an asset channel with a quoting peer exists).
+
+/// The node's channels (operator view). Owner-gated to the admin pubkey.
+async fn admin_channels(
+    State(state): State<AppState>,
+    method: Method,
+    uri: Uri,
+    headers: HeaderMap,
+) -> GatewayResult<Json<Vec<ChannelInfo>>> {
+    auth_admin(&state, &headers, &method, &uri, &[])?;
+    let mut tapd = state.tapd.clone();
+    let channels = tapd.list_channels().await.map_err(GatewayError::Upstream)?;
+    Ok(Json(channels))
+}
+
+#[derive(Debug, Deserialize)]
+struct ChannelOpenRequest {
+    asset_id: String,
+    asset_amount: u64,
+    peer_pubkey: String,
+    #[serde(default)]
+    fee_rate_sat_vb: Option<u32>,
+}
+
+/// Open an asset channel to a (connected) peer, funded from the node's assets.
+async fn admin_channel_open(
+    State(state): State<AppState>,
+    method: Method,
+    uri: Uri,
+    headers: HeaderMap,
+    body: Bytes,
+) -> GatewayResult<Json<TxResponse>> {
+    auth_admin(&state, &headers, &method, &uri, &body)?;
+    let req: ChannelOpenRequest = serde_json::from_slice(&body)
+        .map_err(|e| GatewayError::BadRequest(format!("invalid channel open body: {e}")))?;
+    let asset_id = req.asset_id.trim();
+    let peer = req.peer_pubkey.trim();
+    if asset_id.is_empty() || peer.is_empty() {
+        return Err(GatewayError::BadRequest(
+            "asset_id and peer_pubkey are required".into(),
+        ));
+    }
+    if req.asset_amount == 0 {
+        return Err(GatewayError::BadRequest("asset_amount must be > 0".into()));
+    }
+    let mut tapd = state.tapd.clone();
+    let txid = tapd
+        .fund_asset_channel(
+            asset_id,
+            req.asset_amount,
+            peer,
+            req.fee_rate_sat_vb.unwrap_or(0),
+        )
+        .await
+        .map_err(GatewayError::Upstream)?;
+    Ok(Json(TxResponse { txid }))
+}
+
+#[derive(Debug, Deserialize)]
+struct PeerConnectRequest {
+    pubkey: String,
+    host: String,
+}
+
+#[derive(Debug, Serialize)]
+struct StatusResponse {
+    status: String,
+}
+
+/// Connect to a Lightning peer (prerequisite for opening a channel).
+async fn admin_peer_connect(
+    State(state): State<AppState>,
+    method: Method,
+    uri: Uri,
+    headers: HeaderMap,
+    body: Bytes,
+) -> GatewayResult<Json<StatusResponse>> {
+    auth_admin(&state, &headers, &method, &uri, &body)?;
+    let req: PeerConnectRequest = serde_json::from_slice(&body)
+        .map_err(|e| GatewayError::BadRequest(format!("invalid peer connect body: {e}")))?;
+    let pubkey = req.pubkey.trim();
+    let host = req.host.trim();
+    if pubkey.is_empty() || host.is_empty() {
+        return Err(GatewayError::BadRequest(
+            "pubkey and host are required".into(),
+        ));
+    }
+    let mut tapd = state.tapd.clone();
+    tapd.connect_peer(pubkey, host)
+        .await
+        .map_err(GatewayError::Upstream)?;
+    Ok(Json(StatusResponse {
         status: "ok".into(),
     }))
 }

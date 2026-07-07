@@ -13,6 +13,8 @@ pub struct AuthConfig {
     pub public_base_url: Option<String>,
     /// Max allowed clock skew (seconds) for the NIP-98 event timestamp.
     pub max_skew_secs: u64,
+    /// Operator pubkey allowed to call `/v1/admin/*`. `None` disables admin routes.
+    pub admin_pubkey: Option<String>,
 }
 
 #[derive(Clone)]
