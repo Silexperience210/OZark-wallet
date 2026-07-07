@@ -14,6 +14,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::auth::{authenticate, now_secs};
 use crate::error::{GatewayError, GatewayResult};
+use crate::fees::FeeQuote;
 use crate::reconcile::reconcile_all;
 use crate::registry::{event_kind, LedgerEvent};
 use crate::state::AppState;
@@ -33,6 +34,9 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/decode", get(decode))
         .route("/v1/balance", get(balance))
         .route("/v1/history", get(history))
+        .route("/v1/sats/balance", get(sats_balance))
+        .route("/v1/sats/deposit", post(sats_deposit))
+        .route("/v1/fee/quote", get(fee_quote))
         .route("/v1/ln/decode", get(ln_decode))
         .route("/v1/ln/rfq-quotes", get(ln_rfq_quotes))
         .route("/v1/ln/pay", post(ln_pay))
@@ -99,6 +103,30 @@ fn auth_admin(
         Some(admin) if admin == caller => Ok(()),
         _ => Err(GatewayError::Forbidden("operator only".into())),
     }
+}
+
+/// Charge the operator fee (sats) for a chargeable on-chain op, when enabled.
+/// Returns `Some((operator, amount))` if a fee was taken (so the caller can refund
+/// on failure), or `None` when fees are off, no operator exists, or the payer is
+/// the operator. A `Forbidden` (insufficient sats) propagates to the caller.
+fn maybe_charge_fee(
+    state: &AppState,
+    payer: &str,
+    op: &str,
+    fee_rate_sat_vb: u32,
+) -> GatewayResult<Option<(String, u64)>> {
+    if !state.fees.charge {
+        return Ok(None);
+    }
+    let Some(operator) = effective_admin(state)? else {
+        return Ok(None);
+    };
+    if operator == payer {
+        return Ok(None);
+    }
+    let total = state.fees.quote(op, fee_rate_sat_vb).total_sats;
+    state.registry.charge_fee(payer, &operator, total)?;
+    Ok(Some((operator, total)))
 }
 
 /// One of the caller's holdings: their ledger balance plus tapd metadata.
@@ -300,6 +328,89 @@ async fn history(
     let limit = q.limit.unwrap_or(50).clamp(1, 200);
     let events = state.registry.history(&pubkey, limit)?;
     Ok(Json(events))
+}
+
+#[derive(Debug, Serialize)]
+struct SatsBalanceResponse {
+    amount: u64,
+}
+
+/// The caller's custodial sats balance (funds on-chain operation fees).
+async fn sats_balance(
+    State(state): State<AppState>,
+    method: Method,
+    uri: Uri,
+    headers: HeaderMap,
+) -> GatewayResult<Json<SatsBalanceResponse>> {
+    let pubkey = auth_get(&state, &headers, &method, &uri)?;
+    let amount = state.registry.sats_balance_of(&pubkey)?;
+    Ok(Json(SatsBalanceResponse { amount }))
+}
+
+#[derive(Debug, Deserialize)]
+struct SatsDepositRequest {
+    amount_sats: u64,
+}
+
+#[derive(Debug, Serialize)]
+struct SatsDepositResponse {
+    payment_request: String,
+    r_hash: String,
+}
+
+/// Create a Lightning invoice to top up the caller's sats balance; credited on
+/// settlement (reconciliation via LookupInvoice).
+async fn sats_deposit(
+    State(state): State<AppState>,
+    method: Method,
+    uri: Uri,
+    headers: HeaderMap,
+    body: Bytes,
+) -> GatewayResult<Json<SatsDepositResponse>> {
+    let pubkey = auth_body(&state, &headers, &method, &uri, &body)?;
+    let req: SatsDepositRequest = serde_json::from_slice(&body)
+        .map_err(|e| GatewayError::BadRequest(format!("invalid deposit body: {e}")))?;
+    if req.amount_sats == 0 {
+        return Err(GatewayError::BadRequest("amount_sats must be > 0".into()));
+    }
+    let mut tapd = state.tapd.clone();
+    let created = tapd
+        .create_sats_invoice(req.amount_sats, "OZark sats deposit")
+        .await
+        .map_err(GatewayError::Upstream)?;
+    state.registry.add_pending_sats_deposit(
+        &created.r_hash,
+        &pubkey,
+        req.amount_sats,
+        now_secs() as i64,
+    )?;
+    Ok(Json(SatsDepositResponse {
+        payment_request: created.payment_request,
+        r_hash: created.r_hash,
+    }))
+}
+
+#[derive(Debug, Deserialize)]
+struct FeeQuoteQuery {
+    op: String,
+    #[serde(default)]
+    fee_rate_sat_vb: Option<u32>,
+}
+
+/// Quote the sats fee for a chargeable op (`mint`/`send`) before performing it.
+async fn fee_quote(
+    State(state): State<AppState>,
+    method: Method,
+    uri: Uri,
+    headers: HeaderMap,
+    Query(q): Query<FeeQuoteQuery>,
+) -> GatewayResult<Json<FeeQuote>> {
+    auth_get(&state, &headers, &method, &uri)?;
+    Ok(Json(
+        state
+            .fees
+            .quote(q.op.trim(), q.fee_rate_sat_vb.unwrap_or(0)),
+    ))
 }
 
 #[derive(Debug, Deserialize)]
@@ -547,18 +658,30 @@ async fn mint(
     }
     let amount = if collectible { 1 } else { req.amount };
 
+    // Charge the operator fee (sats) up front; refund if the mint call fails.
+    let fee_rate = req.fee_rate_sat_vb.unwrap_or(0);
+    let charged = maybe_charge_fee(&state, &pubkey, "mint", fee_rate)?;
+
     let mut tapd = state.tapd.clone();
-    let outcome = tapd
+    let outcome = match tapd
         .mint_asset(
             req.name.trim(),
             amount,
             req.meta.as_deref().unwrap_or(""),
             collectible,
             req.grouped.unwrap_or(false),
-            req.fee_rate_sat_vb.unwrap_or(0),
+            fee_rate,
         )
         .await
-        .map_err(GatewayError::Upstream)?;
+    {
+        Ok(o) => o,
+        Err(e) => {
+            if let Some((operator, sats)) = &charged {
+                let _ = state.registry.refund_fee(&pubkey, operator, *sats);
+            }
+            return Err(GatewayError::Upstream(e));
+        }
+    };
 
     state.registry.add_pending_mint(
         &outcome.batch_key,
@@ -724,18 +847,29 @@ async fn send(
         now_secs() as i64,
     )?;
 
-    match tapd
-        .send_asset(req.addr.trim(), req.fee_rate_sat_vb.unwrap_or(0))
-        .await
-    {
+    // Charge the operator fee (sats) after reserving the asset; if the fee fails
+    // (insufficient sats), refund the asset reservation and reject.
+    let fee_rate = req.fee_rate_sat_vb.unwrap_or(0);
+    let charged = match maybe_charge_fee(&state, &pubkey, "send", fee_rate) {
+        Ok(c) => c,
+        Err(e) => {
+            let _ = state.registry.refund_in_flight(id);
+            return Err(e);
+        }
+    };
+
+    match tapd.send_asset(req.addr.trim(), fee_rate).await {
         Ok(txid) => {
             // Settle records the SEND event, stamping the anchor txid as reference.
             let _ = state.registry.settle_in_flight(id, Some(txid.as_str()));
             Ok(Json(TxResponse { txid }))
         }
         Err(e) => {
-            // Refund the reservation so a failed send never loses funds.
+            // Refund the reservation + the sats fee so a failed send loses nothing.
             let _ = state.registry.refund_in_flight(id);
+            if let Some((operator, sats)) = &charged {
+                let _ = state.registry.refund_fee(&pubkey, operator, *sats);
+            }
             Err(GatewayError::Upstream(e))
         }
     }

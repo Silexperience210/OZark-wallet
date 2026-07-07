@@ -66,6 +66,7 @@ impl From<crate::registry::RegistryError> for GatewayError {
         match e {
             // The caller lacks the balance to act — a client-side condition.
             R::InsufficientBalance { .. } => GatewayError::Forbidden(msg),
+            R::InsufficientSats { .. } => GatewayError::Forbidden(msg),
             R::BatchClaimed(_) => GatewayError::BadRequest(msg),
             R::Db(_) => GatewayError::Upstream(msg),
         }

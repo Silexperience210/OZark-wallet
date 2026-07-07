@@ -79,6 +79,22 @@ pub struct Config {
     /// 32-byte key (hex) to encrypt snapshots with XChaCha20-Poly1305. When unset
     /// but a backup dir is configured, snapshots are written in the clear (warned).
     pub backup_key: Option<RedactedKey>,
+
+    /// Charge users a sats fee (from their custodial sats balance) for on-chain
+    /// operations (mint/send). When off (default), operations are free — the
+    /// operator eats the on-chain cost. Requires an operator to exist (fees are
+    /// credited to them).
+    pub charge_fees: bool,
+    /// Operator markup on the estimated network fee, in basis points (10000 =
+    /// 100%). Default 1000 = 10%.
+    pub fee_margin_bps: u64,
+    /// Minimum fee (sats) per chargeable op, covering fixed overhead. Default 100.
+    pub fee_floor_sats: u64,
+    /// Assumed vsize (vB) of a mint / send tx, for the network-fee estimate.
+    pub mint_vsize: u64,
+    pub send_vsize: u64,
+    /// Fee rate (sat/vB) assumed when the request doesn't specify one. Default 5.
+    pub default_fee_rate_sat_vb: u32,
 }
 
 impl Config {
@@ -118,6 +134,16 @@ impl Config {
             .map(PathBuf::from);
         let backup_interval_secs = env_u64("OZARK_GATEWAY_BACKUP_INTERVAL_SECS", 3_600);
         let backup_retention = env_u64("OZARK_GATEWAY_BACKUP_RETENTION", 24) as usize;
+        let charge_fees = std::env::var("OZARK_GATEWAY_CHARGE_FEES")
+            .ok()
+            .map(|s| matches!(s.trim(), "1" | "true" | "yes" | "on"))
+            .unwrap_or(false);
+        let fee_margin_bps = env_u64("OZARK_GATEWAY_FEE_MARGIN_BPS", 1000);
+        let fee_floor_sats = env_u64("OZARK_GATEWAY_FEE_FLOOR_SATS", 100);
+        let mint_vsize = env_u64("OZARK_GATEWAY_MINT_VSIZE", 250);
+        let send_vsize = env_u64("OZARK_GATEWAY_SEND_VSIZE", 200);
+        let default_fee_rate_sat_vb = env_u64("OZARK_GATEWAY_DEFAULT_FEE_RATE", 5) as u32;
+
         let backup_key = match std::env::var("OZARK_GATEWAY_BACKUP_KEY") {
             Ok(s) if !s.trim().is_empty() => {
                 let bytes = hex::decode(s.trim())
@@ -147,6 +173,12 @@ impl Config {
             backup_interval_secs,
             backup_retention,
             backup_key,
+            charge_fees,
+            fee_margin_bps,
+            fee_floor_sats,
+            mint_vsize,
+            send_vsize,
+            default_fee_rate_sat_vb,
         })
     }
 }
