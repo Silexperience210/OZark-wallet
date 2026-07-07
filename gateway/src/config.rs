@@ -86,7 +86,7 @@ pub struct Config {
     /// credited to them).
     pub charge_fees: bool,
     /// Operator markup on the estimated network fee, in basis points (10000 =
-    /// 100%). Default 1000 = 10%.
+    /// 100%). Default 300 = 3%.
     pub fee_margin_bps: u64,
     /// Minimum fee (sats) per chargeable op, covering fixed overhead. Default 100.
     pub fee_floor_sats: u64,
@@ -138,7 +138,7 @@ impl Config {
             .ok()
             .map(|s| matches!(s.trim(), "1" | "true" | "yes" | "on"))
             .unwrap_or(false);
-        let fee_margin_bps = env_u64("OZARK_GATEWAY_FEE_MARGIN_BPS", 1000);
+        let fee_margin_bps = env_u64("OZARK_GATEWAY_FEE_MARGIN_BPS", 300);
         let fee_floor_sats = env_u64("OZARK_GATEWAY_FEE_FLOOR_SATS", 100);
         let mint_vsize = env_u64("OZARK_GATEWAY_MINT_VSIZE", 250);
         let send_vsize = env_u64("OZARK_GATEWAY_SEND_VSIZE", 200);
