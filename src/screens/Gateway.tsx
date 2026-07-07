@@ -99,6 +99,13 @@ interface ChannelInfo {
   remote_balance: number;
 }
 
+interface FeeQuote {
+  network_sats: number;
+  margin_sats: number;
+  total_sats: number;
+  charged: boolean;
+}
+
 const card: CSSProperties = { padding: 18, marginBottom: 14 };
 const label: CSSProperties = { fontSize: 12, fontWeight: 600, marginBottom: 6, display: "block" };
 const row: CSSProperties = { display: "flex", gap: 8, marginBottom: 8 };
@@ -157,6 +164,15 @@ export function Gateway({ onBack }: GatewayProps) {
 
   // Transaction history (per-user ledger)
   const [history, setHistory] = useState<LedgerEvent[]>([]);
+
+  // Custodial sats balance (funds on-chain operation fees) + LN top-up
+  const [satsBalance, setSatsBalance] = useState<number | null>(null);
+  const [depositAmount, setDepositAmount] = useState("");
+  const [depositInvoice, setDepositInvoice] = useState("");
+  const [depositCopied, setDepositCopied] = useState(false);
+  // Fee estimates for mint/send (default-rate quotes, refreshed on demand)
+  const [mintQuote, setMintQuote] = useState<FeeQuote | null>(null);
+  const [sendQuote, setSendQuote] = useState<FeeQuote | null>(null);
 
   // Lightning assets (read-only: RFQ health + invoice decode)
   const [rfq, setRfq] = useState<RfqQuotes | null>(null);
@@ -259,10 +275,60 @@ export function Gateway({ onBack }: GatewayProps) {
       } catch {
         setRfq(null);
       }
+      // Sats balance + default fee estimates (best-effort; node may not charge).
+      try {
+        const b = await invoke<{ amount: number }>("gateway_sats_balance");
+        setSatsBalance(b.amount);
+      } catch {
+        setSatsBalance(null);
+      }
+      setMintQuote(await quoteFee("mint", ""));
+      setSendQuote(await quoteFee("send", ""));
     } catch (e) {
       notify(String(e), "error");
     } finally {
       setLoading(false);
+    }
+  };
+
+  // Fetch a fee quote for `op` at an optional custom rate. Best-effort: returns
+  // null on failure so a fee-estimate failure never blocks the screen.
+  const quoteFee = async (op: "mint" | "send", rate: string): Promise<FeeQuote | null> => {
+    try {
+      return await invoke<FeeQuote>("gateway_fee_quote", {
+        op,
+        feeRateSatVb: rate.trim() ? num(rate) : null,
+      });
+    } catch {
+      return null;
+    }
+  };
+
+  const doDeposit = async () => {
+    const amt = Number(depositAmount);
+    if (!Number.isFinite(amt) || amt <= 0) return notify("Montant en sats requis", "error");
+    setBusy(true);
+    setDepositInvoice("");
+    try {
+      const r = await invoke<{ payment_request: string; r_hash: string }>("gateway_sats_deposit", {
+        amountSats: Math.floor(amt),
+      });
+      setDepositInvoice(r.payment_request);
+      notify("Facture créée — ton solde sats est crédité au règlement", "success");
+    } catch (e) {
+      notify(String(e), "error");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const copyDeposit = async () => {
+    try {
+      await navigator.clipboard.writeText(depositInvoice);
+      setDepositCopied(true);
+      setTimeout(() => setDepositCopied(false), 1500);
+    } catch {
+      /* ignore */
     }
   };
 
@@ -551,6 +617,30 @@ export function Gateway({ onBack }: GatewayProps) {
 
   const configured = savedUrl.trim().length > 0;
 
+  // Compact fee line under mint/send. When the node doesn't charge, says so; when
+  // it does, breaks down network + margin and flags an insufficient sats balance.
+  const feeEstimate = (quote: FeeQuote | null) => {
+    if (!quote) return null;
+    if (!quote.charged) {
+      return (
+        <p className="text-muted" style={{ fontSize: 10, marginBottom: 8 }}>
+          Frais désactivés sur ce nœud — aucun sat débité.
+        </p>
+      );
+    }
+    const insufficient = satsBalance != null && satsBalance < quote.total_sats;
+    return (
+      <p
+        className={insufficient ? undefined : "text-muted"}
+        style={{ fontSize: 10, marginBottom: 8, color: insufficient ? "#f87171" : undefined }}
+      >
+        Frais ~{quote.total_sats.toLocaleString()} sats (réseau{" "}
+        {quote.network_sats.toLocaleString()} + marge {quote.margin_sats.toLocaleString()})
+        {insufficient ? " · solde sats insuffisant, recharge d'abord" : ""}
+      </p>
+    );
+  };
+
   return (
     <div
       style={{
@@ -744,6 +834,65 @@ export function Gateway({ onBack }: GatewayProps) {
             )}
           </div>
 
+          {/* Sats balance (funds on-chain operation fees) */}
+          <div className="glass-card" style={card}>
+            <div
+              style={{
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "center",
+                marginBottom: 6,
+              }}
+            >
+              <strong>⚡ Solde sats (frais réseau)</strong>
+              <span style={{ fontWeight: 700, fontSize: 16 }}>
+                {satsBalance == null ? "—" : `${satsBalance.toLocaleString()} sats`}
+              </span>
+            </div>
+            <p className="text-muted" style={{ fontSize: 11, marginBottom: 10 }}>
+              Ces sats couvrent les frais on-chain de tes opérations (mint / envoi). Recharge en
+              Lightning ; ton solde est crédité au règlement de la facture.
+            </p>
+            <div style={row}>
+              <input
+                className="input"
+                style={{ flex: 1 }}
+                type="number"
+                placeholder="Montant à recharger (sats)"
+                value={depositAmount}
+                onChange={(e) => setDepositAmount(e.target.value)}
+              />
+              <button className="btn btn-primary" onClick={doDeposit} disabled={busy}>
+                {busy ? <span className="spinner" /> : null} Recharger
+              </button>
+            </div>
+            {depositInvoice && (
+              <div style={{ display: "flex", justifyContent: "center", marginTop: 8 }}>
+                <QRImage value={depositInvoice} />
+              </div>
+            )}
+            {depositInvoice && (
+              <div
+                style={{
+                  marginTop: 8,
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 8,
+                  background: "rgba(255,255,255,0.03)",
+                  borderRadius: 8,
+                  padding: 8,
+                }}
+              >
+                <code style={{ flex: 1, fontSize: 11, wordBreak: "break-all" }}>
+                  {depositInvoice}
+                </code>
+                <button className="btn btn-ghost" onClick={copyDeposit}>
+                  {depositCopied ? <Check size={16} /> : <Copy size={16} />}
+                </button>
+              </div>
+            )}
+          </div>
+
           {/* History */}
           <div className="glass-card" style={card}>
             <strong>
@@ -853,10 +1002,12 @@ export function Gateway({ onBack }: GatewayProps) {
                 placeholder="Frais sat/vB (optionnel)"
                 value={mintFee}
                 onChange={(e) => setMintFee(e.target.value)}
+                onBlur={async () => setMintQuote(await quoteFee("mint", mintFee))}
               />
-              <p className="text-muted" style={{ fontSize: 10, marginBottom: 10 }}>
+              <p className="text-muted" style={{ fontSize: 10, marginBottom: 4 }}>
                 Vide = estimation automatique du nœud.
               </p>
+              {feeEstimate(mintQuote)}
               <button className="btn btn-primary" onClick={doMint} disabled={busy}>
                 {busy ? <span className="spinner" /> : null} Émettre
               </button>
@@ -962,11 +1113,13 @@ export function Gateway({ onBack }: GatewayProps) {
                   placeholder="Frais sat/vB (optionnel)"
                   value={sendFee}
                   onChange={(e) => setSendFee(e.target.value)}
+                  onBlur={async () => setSendQuote(await quoteFee("send", sendFee))}
                 />
                 <button className="btn btn-primary" onClick={doSend} disabled={busy}>
                   {busy ? <span className="spinner" /> : null} Envoyer
                 </button>
               </div>
+              {feeEstimate(sendQuote)}
               <p className="text-muted" style={{ fontSize: 10 }}>
                 Vide = estimation automatique du nœud. Les transferts internes sont gratuits.
               </p>

@@ -21,11 +21,12 @@ services:
       OZARK_GATEWAY_TAPD_HOST: ${OZARK_GATEWAY_TAPD_HOST}
       OZARK_GATEWAY_TAPD_CERT: /secrets/tls.cert
       OZARK_GATEWAY_TAPD_MACAROON: /secrets/tapd.macaroon
-      # Optional: lnd macaroon (invoices:read) enabling LN-asset receive
-      # auto-credit (detects invoice settlement via lnd's LookupInvoice, which the
-      # tapd macaroon does not authorize). Leave empty to disable — LN receive then
-      # still issues invoices, but settlement can't be observed. When set, drop the
-      # macaroon in ./secrets and point at it, e.g. /secrets/lnd.macaroon.
+      # Optional: lnd macaroon enabling LN-asset receive auto-credit
+      # (invoices:read, via lnd's LookupInvoice) AND sats-balance top-up
+      # (invoices:write, via AddInvoice — required if fees are on). The tapd
+      # macaroon authorizes neither. Leave empty to disable both; when set, drop
+      # the macaroon in ./secrets and point at it, e.g. /secrets/lnd.macaroon.
+      #   lncli bakemacaroon invoices:read invoices:write --save_to lnd.macaroon
       OZARK_GATEWAY_LND_MACAROON: ${OZARK_GATEWAY_LND_MACAROON:-}
       OZARK_GATEWAY_DB: /data/ozark-gateway.sqlite
       # Optional: set to http://<onion>.onion after first boot for strict URL
@@ -45,6 +46,15 @@ services:
       # Left empty = disabled. Without KEY, snapshots are written in the clear.
       OZARK_GATEWAY_BACKUP_DIR: ${OZARK_GATEWAY_BACKUP_DIR:-}
       OZARK_GATEWAY_BACKUP_KEY: ${OZARK_GATEWAY_BACKUP_KEY:-}
+      # Charge users a sats fee for on-chain ops (mint/send), credited to the
+      # operator. Off by default (ops free). Needs an operator + an lnd macaroon
+      # with invoices:write (users top up their sats via /v1/sats/deposit).
+      OZARK_GATEWAY_CHARGE_FEES: ${OZARK_GATEWAY_CHARGE_FEES:-}
+      OZARK_GATEWAY_FEE_MARGIN_BPS: ${OZARK_GATEWAY_FEE_MARGIN_BPS:-1000}
+      OZARK_GATEWAY_FEE_FLOOR_SATS: ${OZARK_GATEWAY_FEE_FLOOR_SATS:-100}
+      OZARK_GATEWAY_MINT_VSIZE: ${OZARK_GATEWAY_MINT_VSIZE:-250}
+      OZARK_GATEWAY_SEND_VSIZE: ${OZARK_GATEWAY_SEND_VSIZE:-200}
+      OZARK_GATEWAY_DEFAULT_FEE_RATE: ${OZARK_GATEWAY_DEFAULT_FEE_RATE:-5}
     volumes:
       - ./secrets:/secrets:ro
       - gateway-data:/data

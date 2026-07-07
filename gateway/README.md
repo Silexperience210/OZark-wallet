@@ -49,6 +49,9 @@ instant internal transfers. Endpoints:
 | POST   | `/v1/send`            | yes  | send an asset out; **debits the caller** (403 if insufficient) |
 | POST   | `/v1/burn`            | yes  | burn an asset; **debits the caller** |
 | POST   | `/v1/transfer`        | yes  | **instant, free** ledger transfer to another gateway user |
+| GET    | `/v1/sats/balance`    | yes  | the caller's custodial sats balance (funds on-chain fees) |
+| POST   | `/v1/sats/deposit`    | yes  | LN invoice to top up sats; credited on settlement (needs lnd `invoices:write`) |
+| GET    | `/v1/fee/quote?op=…&fee_rate_sat_vb=…` | yes | sats fee estimate for a chargeable op (`mint`/`send`); `charged` flags whether it's actually debited |
 | POST   | `/v1/admin/claim`     | authed | trust-on-first-use: become operator (needs `OZARK_GATEWAY_ALLOW_ADMIN_CLAIM`, no admin yet) |
 | GET    | `/v1/admin/channels`  | operator | list the node's channels (asset channels included) |
 | POST   | `/v1/admin/channel/open` | operator | open an asset channel to a connected peer (funds LN routing) |
@@ -61,6 +64,17 @@ first and refund if tapd rejects; an insufficient balance is a **403**.
 
 **Instant transfers:** `/v1/transfer` between two gateway users is a pure ledger
 move — atomic, no on-chain transaction, no fee.
+
+**Fees & sats balance (optional):** each user has a custodial **sats balance**
+(separate from asset balances) that funds on-chain operation fees. Off by default
+(`OZARK_GATEWAY_CHARGE_FEES=0`) — ops are free and the operator eats the on-chain
+cost. When on, `mint`/`send` debit `fee = max(floor, rate × vsize) + margin` from
+the caller's sats and credit it to the operator, atomically, before the node call;
+the fee is refunded if the op fails (insufficient sats is a **403**). The margin is
+a configurable markup (`OZARK_GATEWAY_FEE_MARGIN_BPS`, default 10%). Users top up
+via `/v1/sats/deposit` (an lnd invoice, credited on settlement) and preview the cost
+via `/v1/fee/quote`. Charging fees needs an operator (recipient) **and** an lnd
+macaroon with `invoices:write` (deposits issue invoices via lnd `AddInvoice`).
 
 **Operator routes:** `/v1/admin/*` spend the node's OWN liquidity (open asset
 channels, connect peers) so they are gated to a single operator: the routes require
@@ -136,6 +150,15 @@ binds the token to a single endpoint).
 | `OZARK_GATEWAY_DB`             | no  | `ozark-gateway.sqlite` | ownership registry path |
 | `OZARK_GATEWAY_PUBLIC_URL`     | no  | — | canonical base URL for strict `u`-tag matching |
 | `OZARK_GATEWAY_MAX_SKEW_SECS`  | no  | `60` | NIP-98 timestamp tolerance |
+| `OZARK_GATEWAY_LND_MACAROON`   | no  | — | lnd macaroon path: `invoices:read` (LN-receive credit) + `invoices:write` (sats deposit) |
+| `OZARK_GATEWAY_CHARGE_FEES`    | no  | `0` | charge sats fees on mint/send (needs operator + lnd `invoices:write`) |
+| `OZARK_GATEWAY_FEE_MARGIN_BPS` | no  | `1000` | operator markup on the network estimate, bps (1000 = 10%) |
+| `OZARK_GATEWAY_FEE_FLOOR_SATS` | no  | `100` | minimum sats per chargeable op |
+| `OZARK_GATEWAY_MINT_VSIZE` / `_SEND_VSIZE` | no | `250` / `200` | assumed tx vsize for the estimate |
+| `OZARK_GATEWAY_DEFAULT_FEE_RATE` | no | `5` | sat/vB assumed when the request omits a rate |
+
+(Other optional vars — admin/claim, reconcile interval, backups — are documented in
+`deploy/env.example`.)
 
 ## Deployment (Umbrel)
 
