@@ -135,6 +135,10 @@ export function Gateway({ onBack }: GatewayProps) {
 
   // Node info + per-asset metadata (read-only)
   const [nodeInfo, setNodeInfo] = useState<NodeInfo | null>(null);
+  // The wallet's own Nostr pubkey (identity signing every request; = operator key).
+  const [myPubkey, setMyPubkey] = useState<{ hex: string; npub: string } | null>(null);
+  const [pubkeyShown, setPubkeyShown] = useState(false);
+  const [pubkeyCopied, setPubkeyCopied] = useState(false);
   const [metaFor, setMetaFor] = useState<string | null>(null);
   const [meta, setMeta] = useState<AssetMeta | null>(null);
   const [metaLoading, setMetaLoading] = useState(false);
@@ -215,6 +219,12 @@ export function Gateway({ onBack }: GatewayProps) {
         setNodeInfo(await invoke<NodeInfo>("gateway_info"));
       } catch {
         setNodeInfo(null);
+      }
+      // My Nostr pubkey is derived locally (no network) — never fatal.
+      try {
+        setMyPubkey(await invoke<{ hex: string; npub: string }>("gateway_pubkey"));
+      } catch {
+        setMyPubkey(null);
       }
       try {
         setHistory(await invoke<LedgerEvent[]>("gateway_history", { limit: 50 }));
@@ -390,6 +400,17 @@ export function Gateway({ onBack }: GatewayProps) {
     }
   };
 
+  const copyPubkey = async () => {
+    if (!myPubkey) return;
+    try {
+      await navigator.clipboard.writeText(myPubkey.hex);
+      setPubkeyCopied(true);
+      setTimeout(() => setPubkeyCopied(false), 1500);
+    } catch {
+      /* ignore */
+    }
+  };
+
   const doSend = async () => {
     if (!sendAddr.trim()) return notify("Adresse requise", "error");
     setBusy(true);
@@ -515,6 +536,46 @@ export function Gateway({ onBack }: GatewayProps) {
                 <Server size={11} style={{ verticalAlign: "-1px", marginRight: 4 }} />
                 tapd {nodeInfo.version || "?"} · {nodeInfo.network || "?"}
               </p>
+            )}
+            {myPubkey && (
+              <div style={{ marginBottom: 10 }}>
+                <button
+                  className="btn btn-ghost"
+                  style={{ fontSize: 11, padding: "2px 8px" }}
+                  onClick={() => setPubkeyShown((v) => !v)}
+                >
+                  🔑 Ma clé Nostr {pubkeyShown ? "▲" : "▼"}
+                </button>
+                {pubkeyShown && (
+                  <div
+                    style={{
+                      marginTop: 6,
+                      background: "rgba(255,255,255,0.03)",
+                      borderRadius: 8,
+                      padding: 8,
+                    }}
+                  >
+                    <div className="text-muted" style={{ fontSize: 10, marginBottom: 4 }}>
+                      Identité qui signe tes requêtes. Le <strong>hex</strong> est ta clé
+                      opérateur (à mettre dans <code>OZARK_GATEWAY_ADMIN_PUBKEY</code>).
+                    </div>
+                    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                      <code style={{ flex: 1, fontSize: 11, wordBreak: "break-all" }}>
+                        {myPubkey.hex}
+                      </code>
+                      <button className="btn btn-ghost" onClick={copyPubkey}>
+                        {pubkeyCopied ? "✓" : "Copier"}
+                      </button>
+                    </div>
+                    <div
+                      className="text-muted"
+                      style={{ fontSize: 10, marginTop: 4, wordBreak: "break-all" }}
+                    >
+                      {myPubkey.npub}
+                    </div>
+                  </div>
+                )}
+              </div>
             )}
             {assets.length === 0 ? (
               <p className="text-muted" style={{ fontSize: 12 }}>

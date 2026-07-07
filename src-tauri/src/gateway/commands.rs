@@ -6,6 +6,7 @@
 
 use crate::gateway::client::{GatewayClient, GatewayConfig};
 use crate::WalletState;
+use nostr::prelude::ToBech32;
 use serde_json::{json, Value};
 use std::path::PathBuf;
 use tauri::{command, AppHandle, State};
@@ -56,6 +57,20 @@ pub fn save_gateway_config(app_handle: AppHandle, base_url: String) -> Result<()
 #[command]
 pub fn load_gateway_config(app_handle: AppHandle) -> Result<Option<GatewayConfig>, String> {
     read_config(&app_handle)
+}
+
+/// The wallet's Nostr public key — the identity every gateway request is signed
+/// with. Returns `{ hex, npub }`. Set the **hex** as the gateway's
+/// `OZARK_GATEWAY_ADMIN_PUBKEY` to authorize this wallet for the operator routes.
+#[command]
+pub fn gateway_pubkey(state: State<'_, WalletState>) -> Result<Value, String> {
+    let guard = state.nostr.lock().map_err(|e| e.to_string())?;
+    let keys = guard.as_ref().ok_or("wallet is locked")?;
+    let pk = keys.public_key();
+    Ok(json!({
+        "hex": pk.to_hex(),
+        "npub": pk.to_bech32().map_err(|e| e.to_string())?,
+    }))
 }
 
 /// Build a gateway client from the saved URL, the wallet's Nostr keys, and Tor.

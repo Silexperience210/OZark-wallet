@@ -210,6 +210,7 @@ pub fn run() {
             gateway::commands::gateway_info,
             gateway::commands::gateway_ln_decode,
             gateway::commands::gateway_ln_rfq_quotes,
+            gateway::commands::gateway_pubkey,
             gateway::commands::gateway_ln_pay,
             gateway::commands::gateway_ln_receive,
             gateway::commands::gateway_mint,
