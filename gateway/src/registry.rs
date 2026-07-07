@@ -29,7 +29,17 @@ pub mod event_kind {
     pub const BURN: &str = "burn";
     pub const TRANSFER_IN: &str = "transfer_in";
     pub const TRANSFER_OUT: &str = "transfer_out";
+    /// Sats deposit (Lightning top-up of the custodial sats balance).
+    pub const DEPOSIT: &str = "deposit";
+    /// Sats fee charged for an on-chain op (paid by the user to the operator).
+    pub const FEE: &str = "fee";
+    /// Sats fee earned by the operator.
+    pub const FEE_EARNED: &str = "fee_earned";
 }
+
+/// The asset id used in history rows for the native sats balance (deposits/fees),
+/// so the per-user history can carry them alongside asset events.
+pub const SATS: &str = "sats";
 
 pub struct Registry {
     // rusqlite's Connection is !Sync; serialize access behind a mutex. The gateway
@@ -49,6 +59,8 @@ pub enum RegistryError {
     },
     #[error("mint batch {0} is already claimed by another owner")]
     BatchClaimed(String),
+    #[error("insufficient sats: {pubkey} holds less than {amount}")]
+    InsufficientSats { pubkey: String, amount: u64 },
 }
 
 /// A mint that has been broadcast but whose asset id is not yet known on-chain.
@@ -76,6 +88,14 @@ pub struct PendingReceive {
 pub struct PendingLnReceive {
     pub r_hash: String,
     pub asset_id: String,
+    pub pubkey: String,
+    pub amount: u64,
+}
+
+/// A Lightning deposit awaiting settlement to credit the user's sats balance.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PendingSatsDeposit {
+    pub r_hash: String,
     pub pubkey: String,
     pub amount: u64,
 }
@@ -193,6 +213,19 @@ impl Registry {
              CREATE TABLE IF NOT EXISTS settings (
                  key   TEXT PRIMARY KEY,
                  value TEXT NOT NULL
+             );
+             -- Per-user native sats balance (custodial), funded by Lightning
+             -- deposits and spent on on-chain operation fees.
+             CREATE TABLE IF NOT EXISTS sats_balances (
+                 pubkey TEXT PRIMARY KEY,
+                 amount INTEGER NOT NULL DEFAULT 0
+             );
+             -- Lightning deposit invoices awaiting settlement, to credit sats.
+             CREATE TABLE IF NOT EXISTS pending_sats_deposits (
+                 r_hash     TEXT PRIMARY KEY,
+                 pubkey     TEXT NOT NULL,
+                 amount     INTEGER NOT NULL,
+                 created_at INTEGER NOT NULL
              );
              -- Per-user transaction history. Append-only; one row per balance move
              -- (transfers append two: transfer_out for the sender, transfer_in for
@@ -781,6 +814,153 @@ impl Registry {
         Ok(())
     }
 
+    // ---- Sats balance + fees ----------------------------------------------
+
+    /// The caller's custodial sats balance.
+    pub fn sats_balance_of(&self, pubkey: &str) -> Result<u64, RegistryError> {
+        let conn = self.lock();
+        sats_balance_conn(&conn, pubkey)
+    }
+
+    /// Charge a sats fee: debit `payer`, credit `operator`, atomically, recording a
+    /// `fee` event for the payer and `fee_earned` for the operator. Errors
+    /// (`InsufficientSats`) roll back. Callers skip this when payer == operator.
+    pub fn charge_fee(
+        &self,
+        payer: &str,
+        operator: &str,
+        amount: u64,
+    ) -> Result<(), RegistryError> {
+        let now = crate::auth::now_secs() as i64;
+        let mut conn = self.lock();
+        let tx = conn.transaction()?;
+        debit_sats_conn(&tx, payer, amount)?;
+        credit_sats_conn(&tx, operator, amount)?;
+        record_event_conn(
+            &tx,
+            payer,
+            SATS,
+            event_kind::FEE,
+            amount,
+            Some(operator),
+            None,
+            now,
+        )?;
+        record_event_conn(
+            &tx,
+            operator,
+            SATS,
+            event_kind::FEE_EARNED,
+            amount,
+            Some(payer),
+            None,
+            now,
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Reverse a fee (tapd action failed after charging): credit the payer back and
+    /// debit the operator (saturating — never errors). Best-effort.
+    pub fn refund_fee(
+        &self,
+        payer: &str,
+        operator: &str,
+        amount: u64,
+    ) -> Result<(), RegistryError> {
+        let mut conn = self.lock();
+        let tx = conn.transaction()?;
+        credit_sats_conn(&tx, payer, amount)?;
+        let op_bal = sats_balance_conn(&tx, operator)?;
+        let take = amount.min(op_bal);
+        if take > 0 {
+            tx.execute(
+                "UPDATE sats_balances SET amount = amount - ?2 WHERE pubkey = ?1",
+                (operator, take as i64),
+            )?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Record a Lightning deposit invoice awaiting settlement for `pubkey`.
+    pub fn add_pending_sats_deposit(
+        &self,
+        r_hash: &str,
+        pubkey: &str,
+        amount: u64,
+        created_at: i64,
+    ) -> Result<(), RegistryError> {
+        let conn = self.lock();
+        conn.execute(
+            "INSERT OR IGNORE INTO pending_sats_deposits (r_hash, pubkey, amount, created_at)
+             VALUES (?1, ?2, ?3, ?4)",
+            (r_hash, pubkey, amount as i64, created_at),
+        )?;
+        Ok(())
+    }
+
+    /// All sats deposits still awaiting settlement.
+    pub fn pending_sats_deposits(&self) -> Result<Vec<PendingSatsDeposit>, RegistryError> {
+        let conn = self.lock();
+        let mut stmt = conn.prepare(
+            "SELECT r_hash, pubkey, amount FROM pending_sats_deposits ORDER BY created_at",
+        )?;
+        let rows = stmt.query_map([], |r| {
+            Ok(PendingSatsDeposit {
+                r_hash: r.get(0)?,
+                pubkey: r.get(1)?,
+                amount: r.get::<_, i64>(2)? as u64,
+            })
+        })?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(Into::into)
+    }
+
+    /// Credit a settled sats deposit and drop the pending row, atomically.
+    pub fn resolve_sats_deposit(&self, r_hash: &str) -> Result<bool, RegistryError> {
+        let mut conn = self.lock();
+        let tx = conn.transaction()?;
+        let row: Option<(String, i64)> = tx
+            .query_row(
+                "SELECT pubkey, amount FROM pending_sats_deposits WHERE r_hash = ?1",
+                [r_hash],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .optional()?;
+        let Some((pubkey, amount)) = row else {
+            return Ok(false);
+        };
+        let credited = amount.max(0) as u64;
+        credit_sats_conn(&tx, &pubkey, credited)?;
+        record_event_conn(
+            &tx,
+            &pubkey,
+            SATS,
+            event_kind::DEPOSIT,
+            credited,
+            None,
+            Some(r_hash),
+            crate::auth::now_secs() as i64,
+        )?;
+        tx.execute(
+            "DELETE FROM pending_sats_deposits WHERE r_hash = ?1",
+            [r_hash],
+        )?;
+        tx.commit()?;
+        Ok(true)
+    }
+
+    /// Drop a pending sats deposit (canceled/expired invoice) without crediting.
+    pub fn delete_pending_sats_deposit(&self, r_hash: &str) -> Result<bool, RegistryError> {
+        let conn = self.lock();
+        let n = conn.execute(
+            "DELETE FROM pending_sats_deposits WHERE r_hash = ?1",
+            [r_hash],
+        )?;
+        Ok(n > 0)
+    }
+
     // ---- History ----------------------------------------------------------
 
     /// Append a history event for `pubkey`. Used by the route layer for actions
@@ -886,6 +1066,41 @@ fn debit_conn(
     conn.execute(
         "UPDATE balances SET amount = amount - ?3 WHERE asset_id = ?1 AND pubkey = ?2",
         (asset_id, pubkey, amount as i64),
+    )?;
+    Ok(())
+}
+
+fn sats_balance_conn(conn: &Connection, pubkey: &str) -> Result<u64, RegistryError> {
+    let amount: Option<i64> = conn
+        .query_row(
+            "SELECT amount FROM sats_balances WHERE pubkey = ?1",
+            [pubkey],
+            |r| r.get(0),
+        )
+        .optional()?;
+    Ok(amount.unwrap_or(0).max(0) as u64)
+}
+
+fn credit_sats_conn(conn: &Connection, pubkey: &str, amount: u64) -> Result<(), RegistryError> {
+    conn.execute(
+        "INSERT INTO sats_balances (pubkey, amount) VALUES (?1, ?2)
+         ON CONFLICT(pubkey) DO UPDATE SET amount = amount + excluded.amount",
+        (pubkey, amount as i64),
+    )?;
+    Ok(())
+}
+
+fn debit_sats_conn(conn: &Connection, pubkey: &str, amount: u64) -> Result<(), RegistryError> {
+    let current = sats_balance_conn(conn, pubkey)?;
+    if current < amount {
+        return Err(RegistryError::InsufficientSats {
+            pubkey: pubkey.to_string(),
+            amount,
+        });
+    }
+    conn.execute(
+        "UPDATE sats_balances SET amount = amount - ?2 WHERE pubkey = ?1",
+        (pubkey, amount as i64),
     )?;
     Ok(())
 }
@@ -1169,6 +1384,36 @@ mod tests {
         assert_eq!(r.get_admin_pubkey().unwrap().as_deref(), Some("abc123"));
         r.set_admin_pubkey("def456").unwrap();
         assert_eq!(r.get_admin_pubkey().unwrap().as_deref(), Some("def456"));
+    }
+
+    #[test]
+    fn sats_deposit_charge_and_refund() {
+        let r = reg();
+        r.add_pending_sats_deposit("dep1", ALICE, 10_000, 1)
+            .unwrap();
+        assert!(r.resolve_sats_deposit("dep1").unwrap());
+        assert_eq!(r.sats_balance_of(ALICE).unwrap(), 10_000);
+
+        r.charge_fee(ALICE, BOB, 500).unwrap();
+        assert_eq!(r.sats_balance_of(ALICE).unwrap(), 9_500);
+        assert_eq!(r.sats_balance_of(BOB).unwrap(), 500);
+
+        r.refund_fee(ALICE, BOB, 500).unwrap();
+        assert_eq!(r.sats_balance_of(ALICE).unwrap(), 10_000);
+        assert_eq!(r.sats_balance_of(BOB).unwrap(), 0);
+
+        let err = r.charge_fee(ALICE, BOB, 999_999).unwrap_err();
+        assert!(matches!(err, RegistryError::InsufficientSats { .. }));
+        assert_eq!(r.sats_balance_of(ALICE).unwrap(), 10_000);
+
+        let kinds: Vec<String> = r
+            .history(ALICE, 50)
+            .unwrap()
+            .into_iter()
+            .map(|e| e.kind)
+            .collect();
+        assert!(kinds.contains(&event_kind::DEPOSIT.to_string()));
+        assert!(kinds.contains(&event_kind::FEE.to_string()));
     }
 
     #[test]

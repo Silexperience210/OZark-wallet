@@ -2,6 +2,7 @@
 
 use std::sync::Arc;
 
+use crate::fees::FeePolicy;
 use crate::registry::Registry;
 use crate::tapd::TapdClient;
 
@@ -29,4 +30,6 @@ pub struct AppState {
     pub registry: Arc<Registry>,
     /// Auth policy.
     pub auth: AuthConfig,
+    /// Fee policy for chargeable on-chain operations.
+    pub fees: FeePolicy,
 }

@@ -592,6 +592,31 @@ impl TapdClient {
         })
     }
 
+    /// Create a plain Lightning (sats) invoice via lnd, for a custodial sats
+    /// deposit. Returns the BOLT11 payment request + hex payment hash. Needs the lnd
+    /// macaroon to authorize `invoices:write` (see `connect`).
+    pub async fn create_sats_invoice(
+        &mut self,
+        amount_sats: u64,
+        memo: &str,
+    ) -> Result<CreatedAssetInvoice, String> {
+        let invoice = lnrpc::Invoice {
+            value: amount_sats as i64,
+            memo: memo.to_string(),
+            ..Default::default()
+        };
+        let resp = self
+            .lightning
+            .add_invoice(invoice)
+            .await
+            .map_err(|e| format!("add_invoice: {e}"))?
+            .into_inner();
+        Ok(CreatedAssetInvoice {
+            payment_request: resp.payment_request,
+            r_hash: hex::encode(resp.r_hash),
+        })
+    }
+
     /// The state of the invoice with hex payment hash `r_hash`, as an
     /// `lnrpc::invoice::InvoiceState` discriminant (OPEN=0, SETTLED=1, CANCELED=2,
     /// ACCEPTED=3). Uses lnd's `LookupInvoice` (needs an lnd macaroon — see

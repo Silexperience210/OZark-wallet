@@ -11,6 +11,7 @@ mod auth;
 mod backup;
 mod config;
 mod error;
+mod fees;
 mod reconcile;
 mod registry;
 mod routes;
@@ -70,6 +71,14 @@ async fn run() -> Result<(), String> {
             max_skew_secs: cfg.max_skew_secs,
             admin_pubkey: cfg.admin_pubkey.clone(),
             allow_admin_claim: cfg.allow_admin_claim,
+        },
+        fees: fees::FeePolicy {
+            charge: cfg.charge_fees,
+            margin_bps: cfg.fee_margin_bps,
+            floor_sats: cfg.fee_floor_sats,
+            mint_vsize: cfg.mint_vsize,
+            send_vsize: cfg.send_vsize,
+            default_rate: cfg.default_fee_rate_sat_vb,
         },
     };
 

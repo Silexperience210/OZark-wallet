@@ -25,6 +25,45 @@ pub async fn reconcile_all(tapd: &mut TapdClient, registry: &Registry) {
     if let Err(e) = reconcile_ln_receives(tapd, registry).await {
         log::warn!("reconcile ln receives: {e}");
     }
+    if let Err(e) = reconcile_sats_deposits(tapd, registry).await {
+        log::warn!("reconcile sats deposits: {e}");
+    }
+}
+
+/// Credit settled Lightning sats deposits to the users that requested them, and
+/// drop canceled/expired ones. Mirrors `reconcile_ln_receives` but for the native
+/// sats balance. Returns the number newly credited.
+pub async fn reconcile_sats_deposits(
+    tapd: &mut TapdClient,
+    registry: &Registry,
+) -> Result<usize, String> {
+    let pending = registry
+        .pending_sats_deposits()
+        .map_err(|e| e.to_string())?;
+    if pending.is_empty() {
+        return Ok(0);
+    }
+    let settled = lnrpc::invoice::InvoiceState::Settled as i32;
+    let canceled = lnrpc::invoice::InvoiceState::Canceled as i32;
+    let mut resolved = 0;
+    for p in pending {
+        match tapd.lookup_invoice_state(&p.r_hash).await {
+            Ok(state) if state == settled => {
+                if registry
+                    .resolve_sats_deposit(&p.r_hash)
+                    .map_err(|e| e.to_string())?
+                {
+                    resolved += 1;
+                }
+            }
+            Ok(state) if state == canceled => {
+                let _ = registry.delete_pending_sats_deposit(&p.r_hash);
+            }
+            Ok(_) => {}
+            Err(e) => log::warn!("lookup_invoice (sats) {}: {e}", p.r_hash),
+        }
+    }
+    Ok(resolved)
 }
 
 /// Credit settled Lightning-asset invoices to the users that requested them, and
