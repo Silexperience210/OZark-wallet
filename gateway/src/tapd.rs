@@ -208,12 +208,49 @@ pub struct RfqQuotes {
     pub sell_quotes: usize,
 }
 
+/// The RFQ quote a peer accepted for an asset invoice: the asset⇄BTC rate (a
+/// fixed-point `coefficient / 10^scale`, in asset units per BTC) and when it
+/// expires. Surfaced so the user sees the negotiated price / slippage.
+#[derive(Debug, Clone, Serialize)]
+pub struct RfqQuote {
+    pub peer: String,
+    /// Asset-per-BTC rate coefficient (string — may exceed u64).
+    pub rate_coefficient: String,
+    /// Decimal scale: divide the coefficient by `10^scale` for the real rate.
+    pub rate_scale: u32,
+    /// Unix seconds after which the quote is no longer valid.
+    pub expiry: u64,
+}
+
 /// A freshly-created Lightning **asset** invoice: the BOLT11 payment request to
-/// hand to the payer, plus the hex payment hash used to detect settlement later.
+/// hand to the payer, plus the hex payment hash used to detect settlement later,
+/// and the accepted RFQ quote (when the invoice was asset-priced).
 #[derive(Debug, Clone, Serialize)]
 pub struct CreatedAssetInvoice {
     pub payment_request: String,
     pub r_hash: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub quote: Option<RfqQuote>,
+}
+
+/// Resolve an `asset_id`/`group_key` hex pair into the two byte vectors tapd
+/// expects (mutually exclusive — one is set, the other empty). A non-empty
+/// `group_key` wins; otherwise `asset_id` is used. Errors if both are empty.
+fn asset_or_group(asset_id: &str, group_key: &str) -> Result<(Vec<u8>, Vec<u8>), String> {
+    let (a, g) = (asset_id.trim(), group_key.trim());
+    if !g.is_empty() {
+        Ok((
+            vec![],
+            hex::decode(g).map_err(|e| format!("invalid group key: {e}"))?,
+        ))
+    } else if !a.is_empty() {
+        Ok((
+            hex::decode(a).map_err(|e| format!("invalid asset id: {e}"))?,
+            vec![],
+        ))
+    } else {
+        Err("asset_id or group_key is required".into())
+    }
 }
 
 /// Summary of one lnd channel (operator view). Asset channels appear here too; the
@@ -466,10 +503,12 @@ impl TapdClient {
         &mut self,
         pay_req: &str,
         asset_id: &str,
+        group_key: &str,
     ) -> Result<DecodedAssetInvoice, String> {
-        let asset_id = hex::decode(asset_id).map_err(|e| format!("invalid asset id: {e}"))?;
+        let (asset_id, group_key) = asset_or_group(asset_id, group_key)?;
         let req = tapchannelrpc::AssetPayReq {
             asset_id,
+            group_key,
             pay_req_string: pay_req.to_string(),
             ..Default::default()
         };
@@ -554,11 +593,12 @@ impl TapdClient {
     pub async fn create_asset_invoice(
         &mut self,
         asset_id: &str,
+        group_key: &str,
         asset_amount: u64,
         peer_pubkey: &str,
         memo: &str,
     ) -> Result<CreatedAssetInvoice, String> {
-        let asset_id = hex::decode(asset_id).map_err(|e| format!("invalid asset id: {e}"))?;
+        let (asset_id, group_key) = asset_or_group(asset_id, group_key)?;
         let peer_pubkey = if peer_pubkey.trim().is_empty() {
             vec![]
         } else {
@@ -572,6 +612,7 @@ impl TapdClient {
         };
         let req = tapchannelrpc::AddInvoiceRequest {
             asset_id,
+            group_key,
             asset_amount,
             peer_pubkey,
             invoice_request: Some(invoice_request),
@@ -583,12 +624,24 @@ impl TapdClient {
             .await
             .map_err(|e| format!("add_invoice: {e}"))?
             .into_inner();
+        // Surface the accepted RFQ quote (rate + expiry) when present.
+        let quote = resp.accepted_buy_quote.map(|q| RfqQuote {
+            peer: q.peer,
+            rate_coefficient: q
+                .ask_asset_rate
+                .as_ref()
+                .map(|r| r.coefficient.clone())
+                .unwrap_or_default(),
+            rate_scale: q.ask_asset_rate.as_ref().map(|r| r.scale).unwrap_or(0),
+            expiry: q.expiry,
+        });
         let inv = resp
             .invoice_result
             .ok_or("add_invoice returned no invoice")?;
         Ok(CreatedAssetInvoice {
             payment_request: inv.payment_request,
             r_hash: hex::encode(inv.r_hash),
+            quote,
         })
     }
 
@@ -614,6 +667,7 @@ impl TapdClient {
         Ok(CreatedAssetInvoice {
             payment_request: resp.payment_request,
             r_hash: hex::encode(resp.r_hash),
+            quote: None, // plain sats invoice — no RFQ negotiation
         })
     }
 

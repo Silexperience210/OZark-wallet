@@ -137,18 +137,22 @@ pub async fn gateway_info(
 }
 
 /// Decode a Lightning asset invoice (read-only): asset units + sat equivalent.
+/// Price against a single `asset_id` or, for a fungible group, a `group_key`.
 #[command]
 pub async fn gateway_ln_decode(
     state: State<'_, WalletState>,
     app_handle: AppHandle,
     pay_req: String,
-    asset_id: String,
+    asset_id: Option<String>,
+    group_key: Option<String>,
 ) -> Result<Value, String> {
-    let path = format!(
-        "/v1/ln/decode?pay_req={}&asset_id={}",
-        pay_req.trim(),
-        asset_id.trim()
-    );
+    let mut path = format!("/v1/ln/decode?pay_req={}", pay_req.trim());
+    if let Some(a) = asset_id.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        path.push_str(&format!("&asset_id={a}"));
+    }
+    if let Some(g) = group_key.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        path.push_str(&format!("&group_key={g}"));
+    }
     client(&state, &app_handle).await?.get(&path).await
 }
 
