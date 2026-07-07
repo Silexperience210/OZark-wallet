@@ -20,6 +20,7 @@ import {
   Store,
 } from "lucide-react";
 import { scanQrCode } from "../lib/scan";
+import { QRImage } from "../components/QRImage";
 import { useI18n } from "../i18n/I18nContext";
 import { useNotification } from "../contexts/NotificationContext";
 import { MainnetBanner } from "../components/MainnetBanner";
@@ -406,6 +407,11 @@ export function Dashboard({ onLogout, onBackup, onTaproot, onLightning, onArk, o
         <div className="text-secondary" style={{ marginBottom: "12px" }}>
           {t("dashboard.onchainAddress")}
         </div>
+        {address && (
+          <div style={{ display: "flex", justifyContent: "center", marginBottom: "12px" }}>
+            <QRImage value={address} />
+          </div>
+        )}
         <div
           style={{
             display: "flex",
@@ -445,6 +451,11 @@ export function Dashboard({ onLogout, onBackup, onTaproot, onLightning, onArk, o
         <div className="text-secondary" style={{ marginBottom: "12px" }}>
           {t("dashboard.arkAddress")}
         </div>
+        {arkAddress && (
+          <div style={{ display: "flex", justifyContent: "center", marginBottom: "12px" }}>
+            <QRImage value={arkAddress} />
+          </div>
+        )}
         <div
           style={{
             display: "flex",

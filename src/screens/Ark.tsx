@@ -17,6 +17,7 @@ import {
   Shield,
 } from "lucide-react";
 import { scanQrCode } from "../lib/scan";
+import { QRImage } from "../components/QRImage";
 import { useNotification } from "../contexts/NotificationContext";
 import { useI18n } from "../i18n/I18nContext";
 import { ConfirmModal } from "../components/ConfirmModal";
@@ -620,6 +621,11 @@ export function Ark({ onBack }: ArkProps) {
           <QrCode size={16} style={{ marginRight: "8px", verticalAlign: "middle" }} />
           Adresse de réception ARK
         </div>
+        {address && (
+          <div style={{ display: "flex", justifyContent: "center", marginBottom: "12px" }}>
+            <QRImage value={address} />
+          </div>
+        )}
         <div
           style={{
             padding: "12px",

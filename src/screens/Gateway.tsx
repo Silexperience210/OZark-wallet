@@ -13,8 +13,11 @@ import {
   Check,
   Info,
   Clock,
+  ScanLine,
 } from "lucide-react";
 import { useNotification } from "../contexts/NotificationContext";
+import { QRImage } from "../components/QRImage";
+import { scanQrCode } from "../lib/scan";
 
 interface GatewayProps {
   onBack: () => void;
@@ -820,6 +823,11 @@ export function Gateway({ onBack }: GatewayProps) {
                 {busy ? <span className="spinner" /> : null} Générer une adresse
               </button>
               {rcvAddr && (
+                <div style={{ display: "flex", justifyContent: "center", marginTop: 10 }}>
+                  <QRImage value={rcvAddr} />
+                </div>
+              )}
+              {rcvAddr && (
                 <div
                   style={{
                     marginTop: 10,
@@ -847,13 +855,25 @@ export function Gateway({ onBack }: GatewayProps) {
               Envoyer (on-chain)
             </strong>
             <div style={{ marginTop: 10 }}>
-              <input
-                className="input"
-                style={{ width: "100%", marginBottom: 8 }}
-                placeholder="Adresse Taproot du destinataire"
-                value={sendAddr}
-                onChange={(e) => setSendAddr(e.target.value)}
-              />
+              <div style={{ ...row, marginBottom: 8 }}>
+                <input
+                  className="input"
+                  style={{ flex: 1 }}
+                  placeholder="Adresse Taproot du destinataire"
+                  value={sendAddr}
+                  onChange={(e) => setSendAddr(e.target.value)}
+                />
+                <button
+                  className="btn btn-ghost"
+                  title="Scanner un QR"
+                  onClick={async () => {
+                    const s = await scanQrCode();
+                    if (s) setSendAddr(s.trim());
+                  }}
+                >
+                  <ScanLine size={16} />
+                </button>
+              </div>
               <div style={row}>
                 <input
                   className="input"
@@ -948,13 +968,25 @@ export function Gateway({ onBack }: GatewayProps) {
                 ? `RFQ : ${rfq.buy_quotes} devis d'achat · ${rfq.sell_quotes} de vente`
                 : "RFQ indisponible (aucun canal d'asset ?)."}
             </p>
-            <input
-              className="input"
-              style={{ width: "100%", marginBottom: 8 }}
-              placeholder="Facture Lightning (lnbc…)"
-              value={lnPayReq}
-              onChange={(e) => setLnPayReq(e.target.value)}
-            />
+            <div style={{ ...row, marginBottom: 8 }}>
+              <input
+                className="input"
+                style={{ flex: 1 }}
+                placeholder="Facture Lightning (lnbc…)"
+                value={lnPayReq}
+                onChange={(e) => setLnPayReq(e.target.value)}
+              />
+              <button
+                className="btn btn-ghost"
+                title="Scanner un QR"
+                onClick={async () => {
+                  const s = await scanQrCode();
+                  if (s) setLnPayReq(s.trim());
+                }}
+              >
+                <ScanLine size={16} />
+              </button>
+            </div>
             <div style={row}>
               <input
                 className="input"
@@ -1037,6 +1069,11 @@ export function Gateway({ onBack }: GatewayProps) {
                   {busy ? <span className="spinner" /> : null} Créer
                 </button>
               </div>
+              {lnRcvInvoice && (
+                <div style={{ display: "flex", justifyContent: "center", marginTop: 8 }}>
+                  <QRImage value={lnRcvInvoice} />
+                </div>
+              )}
               {lnRcvInvoice && (
                 <div
                   style={{
