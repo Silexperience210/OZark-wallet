@@ -75,6 +75,7 @@ type TapChannelClient = tapchannelrpc::taproot_asset_channels_client::TaprootAss
     InterceptedService<Channel, Macaroon>,
 >;
 type RfqClient = rfqrpc::rfq_client::RfqClient<InterceptedService<Channel, Macaroon>>;
+type LndClient = lnrpc::lightning_client::LightningClient<InterceptedService<Channel, Macaroon>>;
 
 /// Injects the tapd macaroon into every gRPC request's metadata.
 #[derive(Clone)]
@@ -101,6 +102,10 @@ pub struct TapdClient {
     mint: MintClient,
     tapchannel: TapChannelClient,
     rfq: RfqClient,
+    /// lnd's own `Lightning` service, used only for `LookupInvoice` to detect
+    /// LN-asset receive settlement. Authorized by a separate lnd macaroon when one
+    /// is provided (the tapd macaroon does not cover lnd RPCs); see `connect`.
+    lightning: LndClient,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -197,10 +202,27 @@ pub struct RfqQuotes {
     pub sell_quotes: usize,
 }
 
+/// A freshly-created Lightning **asset** invoice: the BOLT11 payment request to
+/// hand to the payer, plus the hex payment hash used to detect settlement later.
+#[derive(Debug, Clone, Serialize)]
+pub struct CreatedAssetInvoice {
+    pub payment_request: String,
+    pub r_hash: String,
+}
+
 impl TapdClient {
     /// Connect to a local tapd. `host` is `host:port`; `cert_pem` is tapd's TLS
-    /// certificate (PEM); `macaroon_hex` authorizes the gRPC calls.
-    pub async fn connect(host: &str, cert_pem: &str, macaroon_hex: &str) -> Result<Self, String> {
+    /// certificate (PEM); `macaroon_hex` authorizes the tapd/litd gRPC calls.
+    /// `lnd_macaroon_hex`, when present, authorizes the separate lnd `Lightning`
+    /// service (`LookupInvoice`) used to detect LN-asset receive settlement — the
+    /// tapd macaroon does not cover lnd RPCs. When absent, LN receive still issues
+    /// invoices but settlement can't be observed, so auto-credit is disabled.
+    pub async fn connect(
+        host: &str,
+        cert_pem: &str,
+        macaroon_hex: &str,
+        lnd_macaroon_hex: Option<&str>,
+    ) -> Result<Self, String> {
         let host = host.trim();
         if host.is_empty() {
             return Err("tapd host is empty".into());
@@ -242,6 +264,17 @@ impl TapdClient {
                 channel.clone(),
                 interceptor.clone(),
             );
+        // lnd's Lightning service needs an lnd macaroon; fall back to the tapd
+        // macaroon when none is provided (LookupInvoice then fails 'permission
+        // denied', which the reconciler logs — invoices still issue, auto-credit
+        // is simply off).
+        let lnd_interceptor = Macaroon {
+            hex: Zeroizing::new(lnd_macaroon_hex.unwrap_or(macaroon_hex).to_string()),
+        };
+        let lightning = lnrpc::lightning_client::LightningClient::with_interceptor(
+            channel.clone(),
+            lnd_interceptor,
+        );
         let rfq = rfqrpc::rfq_client::RfqClient::with_interceptor(channel, interceptor);
         Ok(Self {
             assets,
@@ -249,6 +282,7 @@ impl TapdClient {
             mint,
             tapchannel,
             rfq,
+            lightning,
         })
     }
 
@@ -485,6 +519,70 @@ impl TapdClient {
             }
         }
         Ok(status)
+    }
+
+    /// Create a Lightning **asset** invoice: request `asset_amount` units of
+    /// `asset_id`, priced to sats by negotiating an RFQ quote with a peer. Returns
+    /// the BOLT11 payment request to hand to the payer and the hex payment hash used
+    /// to detect settlement later. Requires an open asset channel + a peer that
+    /// quotes the asset. `peer_pubkey` may be empty to let litd pick a peer; `memo`
+    /// is the invoice description.
+    pub async fn create_asset_invoice(
+        &mut self,
+        asset_id: &str,
+        asset_amount: u64,
+        peer_pubkey: &str,
+        memo: &str,
+    ) -> Result<CreatedAssetInvoice, String> {
+        let asset_id = hex::decode(asset_id).map_err(|e| format!("invalid asset id: {e}"))?;
+        let peer_pubkey = if peer_pubkey.trim().is_empty() {
+            vec![]
+        } else {
+            hex::decode(peer_pubkey).map_err(|e| format!("invalid peer pubkey: {e}"))?
+        };
+        // The lnd invoice fields (value/value_msat) are overwritten by the asset
+        // amount after the RFQ negotiation; we only carry the memo through.
+        let invoice_request = lnrpc::Invoice {
+            memo: memo.to_string(),
+            ..Default::default()
+        };
+        let req = tapchannelrpc::AddInvoiceRequest {
+            asset_id,
+            asset_amount,
+            peer_pubkey,
+            invoice_request: Some(invoice_request),
+            ..Default::default()
+        };
+        let resp = self
+            .tapchannel
+            .add_invoice(req)
+            .await
+            .map_err(|e| format!("add_invoice: {e}"))?
+            .into_inner();
+        let inv = resp
+            .invoice_result
+            .ok_or("add_invoice returned no invoice")?;
+        Ok(CreatedAssetInvoice {
+            payment_request: inv.payment_request,
+            r_hash: hex::encode(inv.r_hash),
+        })
+    }
+
+    /// Whether the invoice with hex payment hash `r_hash` has **settled**. Uses
+    /// lnd's `LookupInvoice` (needs an lnd macaroon — see `connect`). A pending,
+    /// canceled, or not-yet-known invoice returns `false`.
+    pub async fn lookup_invoice_settled(&mut self, r_hash: &str) -> Result<bool, String> {
+        let r_hash = hex::decode(r_hash).map_err(|e| format!("invalid r_hash: {e}"))?;
+        let inv = self
+            .lightning
+            .lookup_invoice(lnrpc::PaymentHash {
+                r_hash,
+                ..Default::default()
+            })
+            .await
+            .map_err(|e| format!("lookup_invoice: {e}"))?
+            .into_inner();
+        Ok(inv.state == lnrpc::invoice::InvoiceState::Settled as i32)
     }
 
     /// The node's currently-accepted RFQ quote counts (buy/sell). Read-only.

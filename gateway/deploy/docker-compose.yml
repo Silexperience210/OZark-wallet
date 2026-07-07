@@ -21,6 +21,12 @@ services:
       OZARK_GATEWAY_TAPD_HOST: ${OZARK_GATEWAY_TAPD_HOST}
       OZARK_GATEWAY_TAPD_CERT: /secrets/tls.cert
       OZARK_GATEWAY_TAPD_MACAROON: /secrets/tapd.macaroon
+      # Optional: lnd macaroon (invoices:read) enabling LN-asset receive
+      # auto-credit (detects invoice settlement via lnd's LookupInvoice, which the
+      # tapd macaroon does not authorize). Leave empty to disable — LN receive then
+      # still issues invoices, but settlement can't be observed. When set, drop the
+      # macaroon in ./secrets and point at it, e.g. /secrets/lnd.macaroon.
+      OZARK_GATEWAY_LND_MACAROON: ${OZARK_GATEWAY_LND_MACAROON:-}
       OZARK_GATEWAY_DB: /data/ozark-gateway.sqlite
       # Optional: set to http://<onion>.onion after first boot for strict URL
       # binding. Left empty, auth still binds each token to its endpoint (path-only).

@@ -41,7 +41,23 @@ async fn run() -> Result<(), String> {
     })?;
     let macaroon_hex = hex::encode(macaroon_bytes);
 
-    let tapd = tapd::TapdClient::connect(&cfg.tapd_host, &cert_pem, &macaroon_hex).await?;
+    // Optional lnd macaroon (invoices:read) for LN-receive settlement detection.
+    let lnd_macaroon_hex = match &cfg.lnd_macaroon_path {
+        Some(p) => {
+            let bytes =
+                std::fs::read(p).map_err(|e| format!("read lnd macaroon {}: {e}", p.display()))?;
+            Some(hex::encode(bytes))
+        }
+        None => None,
+    };
+
+    let tapd = tapd::TapdClient::connect(
+        &cfg.tapd_host,
+        &cert_pem,
+        &macaroon_hex,
+        lnd_macaroon_hex.as_deref(),
+    )
+    .await?;
     let registry = Arc::new(registry::Registry::open(&cfg.db_path).map_err(|e| e.to_string())?);
 
     let state = state::AppState {
