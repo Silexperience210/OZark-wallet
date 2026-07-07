@@ -170,6 +170,30 @@ pub async fn gateway_ln_pay(
         .await
 }
 
+/// Create a Lightning asset invoice to receive `asset_amount` units of `asset_id`.
+/// Returns the BOLT11 `payment_request` (+ `r_hash`); the caller is credited once
+/// the invoice settles (auto-credit needs the gateway's lnd macaroon).
+#[command]
+pub async fn gateway_ln_receive(
+    state: State<'_, WalletState>,
+    app_handle: AppHandle,
+    asset_id: String,
+    asset_amount: u64,
+    peer_pubkey: Option<String>,
+    memo: Option<String>,
+) -> Result<Value, String> {
+    let body = json!({
+        "asset_id": asset_id,
+        "asset_amount": asset_amount,
+        "peer_pubkey": peer_pubkey,
+        "memo": memo,
+    });
+    client(&state, &app_handle)
+        .await?
+        .post("/v1/ln/receive", body)
+        .await
+}
+
 #[command]
 #[allow(clippy::too_many_arguments)]
 pub async fn gateway_mint(
