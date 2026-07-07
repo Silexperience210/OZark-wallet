@@ -97,8 +97,8 @@ async fn run() -> Result<(), String> {
     Ok(())
 }
 
-/// Spawn the background maintenance tasks. One loop reconciles + audits solvency
-/// + purges stale invoices on an interval; a second (if a backup dir is set)
+/// Spawn the background maintenance tasks. One loop reconciles, audits solvency,
+/// and purges stale invoices on an interval; a second (if a backup dir is set)
 /// snapshots the ledger. Both are best-effort and never touch the request path.
 fn spawn_maintenance(
     cfg: &config::Config,
