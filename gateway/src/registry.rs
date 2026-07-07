@@ -663,6 +663,7 @@ impl Registry {
     /// (kind/counterparty from the row; `reference_override` wins when given, e.g.
     /// the on-chain txid learned only after the send) and drop the row, atomically.
     /// Returns whether a row was resolved.
+    #[allow(clippy::type_complexity)]
     pub fn settle_in_flight(
         &self,
         id: i64,

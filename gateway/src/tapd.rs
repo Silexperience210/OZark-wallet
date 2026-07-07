@@ -611,7 +611,6 @@ impl TapdClient {
         let req = routerrpc::TrackPaymentRequest {
             payment_hash,
             no_inflight_updates: true,
-            ..Default::default()
         };
         let mut stream = self
             .router
