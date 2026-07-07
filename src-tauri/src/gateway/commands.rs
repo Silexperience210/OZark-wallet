@@ -150,7 +150,11 @@ pub async fn gateway_ln_decode(
     if let Some(a) = asset_id.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
         path.push_str(&format!("&asset_id={a}"));
     }
-    if let Some(g) = group_key.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+    if let Some(g) = group_key
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
         path.push_str(&format!("&group_key={g}"));
     }
     client(&state, &app_handle).await?.get(&path).await
