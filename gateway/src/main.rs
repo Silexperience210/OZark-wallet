@@ -112,10 +112,14 @@ fn spawn_maintenance(
         let registry = registry.clone();
         tokio::spawn(async move {
             let mut tick = tokio::time::interval(period);
-            tick.tick().await; // consume the immediate first tick
             loop {
+                // interval's first tick fires immediately -> maintenance at boot,
+                // so in-flight payments are recovered promptly after a restart.
                 tick.tick().await;
                 reconcile::reconcile_all(&mut tapd, &registry).await;
+                if let Err(e) = reconcile::recover_in_flight(&mut tapd, &registry).await {
+                    log::warn!("recover in-flight: {e}");
+                }
                 if let Err(e) = reconcile::audit_solvency(&mut tapd, &registry).await {
                     log::warn!("solvency audit: {e}");
                 }

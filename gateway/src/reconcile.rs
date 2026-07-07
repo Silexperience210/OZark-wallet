@@ -10,7 +10,7 @@
 use std::collections::HashMap;
 
 use crate::auth::now_secs;
-use crate::registry::Registry;
+use crate::registry::{event_kind, Registry};
 use crate::tapd::{lnrpc, TapdClient};
 
 /// Run both reconcilers, logging (not propagating) errors — a best-effort refresh
@@ -90,6 +90,65 @@ pub async fn audit_solvency(tapd: &mut TapdClient, registry: &Registry) -> Resul
         }
     }
     Ok(())
+}
+
+/// Recover payments that were debited but whose outcome was unknown (a crash
+/// between the debit and its resolution). **ln_send** entries are tracked via
+/// lnd's `TrackPaymentV2`: SUCCEEDED keeps the debit (records the event), FAILED
+/// refunds; still-in-flight or an unknown hash is left for the next pass. **send**
+/// (on-chain) is NEVER auto-refunded — the tx may already have broadcast, so
+/// refunding would double-spend custody; it is surfaced for manual review.
+/// Returns the number resolved.
+pub async fn recover_in_flight(
+    tapd: &mut TapdClient,
+    registry: &Registry,
+) -> Result<usize, String> {
+    let entries = registry.in_flight_entries().map_err(|e| e.to_string())?;
+    if entries.is_empty() {
+        return Ok(0);
+    }
+    let succeeded = lnrpc::payment::PaymentStatus::Succeeded as i32;
+    let failed = lnrpc::payment::PaymentStatus::Failed as i32;
+    let mut resolved = 0;
+    for e in entries {
+        if e.kind == event_kind::LN_SEND {
+            let Some(hash) = e.reference.as_deref() else {
+                log::warn!(
+                    "in-flight ln_send {} has no payment hash — needs manual review",
+                    e.id
+                );
+                continue;
+            };
+            match tapd.track_payment(hash).await {
+                Ok(s) if s == succeeded => {
+                    if registry
+                        .settle_in_flight(e.id, None)
+                        .map_err(|e| e.to_string())?
+                    {
+                        resolved += 1;
+                    }
+                }
+                Ok(s) if s == failed => {
+                    if registry.refund_in_flight(e.id).map_err(|e| e.to_string())? {
+                        resolved += 1;
+                    }
+                }
+                Ok(_) => {} // still in flight — leave for the next pass
+                Err(err) => log::warn!("track_payment {hash}: {err}"),
+            }
+        } else {
+            // On-chain send (or any non-LN kind): may have broadcast — never
+            // auto-refund. Surface for manual review.
+            log::warn!(
+                "in-flight {} {} ({} units of {}) unresolved — needs manual review",
+                e.kind,
+                e.id,
+                e.amount,
+                e.asset_id
+            );
+        }
+    }
+    Ok(resolved)
 }
 
 /// Credit confirmed incoming transfers to the users that generated their receive
