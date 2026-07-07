@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use crate::fees::FeePolicy;
 use crate::registry::Registry;
+use crate::security::Security;
 use crate::tapd::TapdClient;
 
 /// Auth policy, derived from [`crate::config::Config`].
@@ -32,4 +33,6 @@ pub struct AppState {
     pub auth: AuthConfig,
     /// Fee policy for chargeable on-chain operations.
     pub fees: FeePolicy,
+    /// Per-pubkey rate limiter + NIP-98 replay guard (shared across handlers).
+    pub security: Arc<Security>,
 }

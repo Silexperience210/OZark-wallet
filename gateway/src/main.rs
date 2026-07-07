@@ -15,6 +15,7 @@ mod fees;
 mod reconcile;
 mod registry;
 mod routes;
+mod security;
 mod state;
 mod tapd;
 
@@ -80,6 +81,10 @@ async fn run() -> Result<(), String> {
             send_vsize: cfg.send_vsize,
             default_rate: cfg.default_fee_rate_sat_vb,
         },
+        security: Arc::new(security::Security::new(security::SecurityConfig {
+            burst: cfg.rate_burst,
+            refill_per_sec: cfg.rate_per_sec,
+        })),
     };
 
     // Background maintenance: periodic reconciliation + solvency audit + stale
