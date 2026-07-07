@@ -90,6 +90,28 @@ interface DecodedAssetInvoice {
   destination: string;
 }
 
+interface RfqQuote {
+  peer: string;
+  rate_coefficient: string;
+  rate_scale: number;
+  expiry: number;
+}
+
+/// Human rate from an RFQ quote: coefficient/10^scale = asset units per BTC.
+function formatRfqRate(q: RfqQuote): string {
+  try {
+    const coeff = BigInt(q.rate_coefficient || "0");
+    if (coeff === 0n) return "taux indisponible";
+    const satsPerBtcScaled = 100_000_000 * 10 ** q.rate_scale; // 1e8 * 10^scale
+    const satsPerUnit = satsPerBtcScaled / Number(coeff);
+    return satsPerUnit >= 1
+      ? `1 unité ≈ ${satsPerUnit.toFixed(2)} sats`
+      : `1 sat ≈ ${(Number(coeff) / satsPerBtcScaled).toFixed(2)} unités`;
+  } catch {
+    return "taux indisponible";
+  }
+}
+
 interface ChannelInfo {
   active: boolean;
   peer: string;
@@ -178,11 +200,15 @@ export function Gateway({ onBack }: GatewayProps) {
   const [rfq, setRfq] = useState<RfqQuotes | null>(null);
   const [lnPayReq, setLnPayReq] = useState("");
   const [lnAssetId, setLnAssetId] = useState("");
+  // Optional fungible group key: decode/preview an invoice priced against a whole
+  // asset group instead of one asset id (paying still needs a concrete asset id).
+  const [lnGroupKey, setLnGroupKey] = useState("");
   const [lnDecoded, setLnDecoded] = useState<DecodedAssetInvoice | null>(null);
   // Lightning receive (create asset invoice)
   const [lnRcvAssetId, setLnRcvAssetId] = useState("");
   const [lnRcvAmount, setLnRcvAmount] = useState("");
   const [lnRcvInvoice, setLnRcvInvoice] = useState("");
+  const [lnRcvQuote, setLnRcvQuote] = useState<RfqQuote | null>(null);
   const [lnRcvCopied, setLnRcvCopied] = useState(false);
 
   // Operator (admin) — asset channel management (only works if this wallet's
@@ -353,15 +379,16 @@ export function Gateway({ onBack }: GatewayProps) {
   };
 
   const doLnDecode = async () => {
-    if (!lnPayReq.trim() || !lnAssetId.trim())
-      return notify("Facture et asset id requis", "error");
+    if (!lnPayReq.trim() || (!lnAssetId.trim() && !lnGroupKey.trim()))
+      return notify("Facture + asset id (ou group key) requis", "error");
     setBusy(true);
     setLnDecoded(null);
     try {
       setLnDecoded(
         await invoke<DecodedAssetInvoice>("gateway_ln_decode", {
           payReq: lnPayReq.trim(),
-          assetId: lnAssetId.trim(),
+          assetId: lnAssetId.trim() || null,
+          groupKey: lnGroupKey.trim() || null,
         }),
       );
     } catch (e) {
@@ -398,14 +425,19 @@ export function Gateway({ onBack }: GatewayProps) {
       return notify("Asset id et montant requis", "error");
     setBusy(true);
     setLnRcvInvoice("");
+    setLnRcvQuote(null);
     try {
-      const r = await invoke<{ payment_request: string; r_hash: string }>("gateway_ln_receive", {
-        assetId: lnRcvAssetId.trim(),
-        assetAmount: amt,
-        peerPubkey: null,
-        memo: null,
-      });
+      const r = await invoke<{ payment_request: string; r_hash: string; quote?: RfqQuote }>(
+        "gateway_ln_receive",
+        {
+          assetId: lnRcvAssetId.trim(),
+          assetAmount: amt,
+          peerPubkey: null,
+          memo: null,
+        },
+      );
       setLnRcvInvoice(r.payment_request);
+      setLnRcvQuote(r.quote ?? null);
       notify("Facture Lightning créée — crédit à réception", "success");
     } catch (e) {
       notify(String(e), "error");
@@ -1232,6 +1264,17 @@ export function Gateway({ onBack }: GatewayProps) {
                 {busy ? <span className="spinner" /> : null} Décoder
               </button>
             </div>
+            <input
+              className="input"
+              style={{ width: "100%", marginBottom: 4 }}
+              placeholder="ou group key (fongible, optionnel)"
+              value={lnGroupKey}
+              onChange={(e) => setLnGroupKey(e.target.value)}
+            />
+            <p className="text-muted" style={{ fontSize: 10, marginBottom: 4 }}>
+              Group key = prévisualise une facture contre un groupe d'assets fongible. Le paiement
+              utilise ensuite l'asset id concret.
+            </p>
             {lnDecoded && (
               <div
                 style={{
@@ -1326,6 +1369,12 @@ export function Gateway({ onBack }: GatewayProps) {
                     {lnRcvCopied ? "✓" : "Copier"}
                   </button>
                 </div>
+              )}
+              {lnRcvQuote && (
+                <p style={{ fontSize: 10, marginTop: 6, color: "#4ade80" }}>
+                  Devis RFQ : {formatRfqRate(lnRcvQuote)} · expire{" "}
+                  {new Date(lnRcvQuote.expiry * 1000).toLocaleTimeString()}
+                </p>
               )}
               <p className="text-muted" style={{ fontSize: 10, marginTop: 8 }}>
                 Crée une facture Lightning en asset ; ton solde est crédité à son règlement.

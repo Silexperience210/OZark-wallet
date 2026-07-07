@@ -431,11 +431,17 @@ async fn fee_quote(
 #[derive(Debug, Deserialize)]
 struct LnDecodeQuery {
     pay_req: String,
+    #[serde(default)]
     asset_id: String,
+    /// Price the invoice against a fungible **group** instead of one asset id.
+    /// Mutually exclusive with `asset_id`; the resolved tranche is returned.
+    #[serde(default)]
+    group_key: String,
 }
 
 /// Decode a Lightning **asset** invoice (read-only): asset units + sat equivalent
-/// for a given asset id. Not owner-scoped — decoding leaks nothing about balances.
+/// for a given asset id (or fungible group key). Not owner-scoped — decoding leaks
+/// nothing about balances.
 async fn ln_decode(
     State(state): State<AppState>,
     method: Method,
@@ -445,15 +451,14 @@ async fn ln_decode(
 ) -> GatewayResult<Json<DecodedAssetInvoice>> {
     auth_get(&state, &headers, &method, &uri)?;
     let pay_req = q.pay_req.trim();
-    let asset_id = q.asset_id.trim();
-    if pay_req.is_empty() || asset_id.is_empty() {
+    if pay_req.is_empty() || (q.asset_id.trim().is_empty() && q.group_key.trim().is_empty()) {
         return Err(GatewayError::BadRequest(
-            "pay_req and asset_id are required".into(),
+            "pay_req and one of asset_id / group_key are required".into(),
         ));
     }
     let mut tapd = state.tapd.clone();
     let decoded = tapd
-        .decode_asset_invoice(pay_req, asset_id)
+        .decode_asset_invoice(pay_req, q.asset_id.trim(), q.group_key.trim())
         .await
         .map_err(GatewayError::Upstream)?;
     Ok(Json(decoded))
@@ -513,9 +518,11 @@ async fn ln_pay(
     }
 
     let mut tapd = state.tapd.clone();
-    // Decode to learn how many asset units the invoice consumes.
+    // Decode to learn how many asset units the invoice consumes. Paying keys the
+    // ledger debit by a concrete asset_id, so group-key pay is not offered here
+    // (it needs group-fungible ledger accounting — a separate change).
     let decoded = tapd
-        .decode_asset_invoice(pay_req, asset_id)
+        .decode_asset_invoice(pay_req, asset_id, "")
         .await
         .map_err(GatewayError::Upstream)?;
     let amount = decoded.asset_amount;
@@ -579,6 +586,9 @@ struct LnReceiveResponse {
     payment_request: String,
     /// Hex payment hash; reconciliation credits the caller once it settles.
     r_hash: String,
+    /// The accepted RFQ quote (negotiated asset⇄sat rate + expiry), when priced.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    quote: Option<crate::tapd::RfqQuote>,
 }
 
 /// Create a Lightning **asset** invoice for the caller. On settlement,
@@ -604,9 +614,13 @@ async fn ln_receive(
     }
 
     let mut tapd = state.tapd.clone();
+    // Receive credits the ledger under a concrete asset_id, so it is asset-id
+    // scoped (group-key receive needs group-fungible crediting — a separate
+    // change). The accepted RFQ quote is surfaced for the user.
     let created = tapd
         .create_asset_invoice(
             asset_id,
+            "",
             req.asset_amount,
             req.peer_pubkey.as_deref().unwrap_or(""),
             req.memo.as_deref().unwrap_or(""),
@@ -623,6 +637,7 @@ async fn ln_receive(
     Ok(Json(LnReceiveResponse {
         payment_request: created.payment_request,
         r_hash: created.r_hash,
+        quote: created.quote,
     }))
 }
 
