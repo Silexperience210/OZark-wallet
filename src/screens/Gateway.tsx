@@ -99,7 +99,7 @@ function short(s: string, head = 10, tail = 6): string {
   return s.length > head + tail + 1 ? `${s.slice(0, head)}…${s.slice(-tail)}` : s;
 }
 
-const CREDIT_KINDS = new Set(["mint", "receive", "transfer_in"]);
+const CREDIT_KINDS = new Set(["mint", "receive", "ln_receive", "transfer_in"]);
 
 function kindLabel(kind: string): string {
   switch (kind) {
@@ -111,6 +111,8 @@ function kindLabel(kind: string): string {
       return "Envoyé";
     case "ln_send":
       return "Envoyé (LN)";
+    case "ln_receive":
+      return "Reçu (LN)";
     case "burn":
       return "Brûlé";
     case "transfer_in":
@@ -145,6 +147,11 @@ export function Gateway({ onBack }: GatewayProps) {
   const [lnPayReq, setLnPayReq] = useState("");
   const [lnAssetId, setLnAssetId] = useState("");
   const [lnDecoded, setLnDecoded] = useState<DecodedAssetInvoice | null>(null);
+  // Lightning receive (create asset invoice)
+  const [lnRcvAssetId, setLnRcvAssetId] = useState("");
+  const [lnRcvAmount, setLnRcvAmount] = useState("");
+  const [lnRcvInvoice, setLnRcvInvoice] = useState("");
+  const [lnRcvCopied, setLnRcvCopied] = useState(false);
 
   // Mint
   const [mintName, setMintName] = useState("");
@@ -286,6 +293,28 @@ export function Gateway({ onBack }: GatewayProps) {
     }
   };
 
+  const doLnReceive = async () => {
+    const amt = Number(lnRcvAmount);
+    if (!lnRcvAssetId.trim() || !Number.isFinite(amt) || amt <= 0)
+      return notify("Asset id et montant requis", "error");
+    setBusy(true);
+    setLnRcvInvoice("");
+    try {
+      const r = await invoke<{ payment_request: string; r_hash: string }>("gateway_ln_receive", {
+        assetId: lnRcvAssetId.trim(),
+        assetAmount: amt,
+        peerPubkey: null,
+        memo: null,
+      });
+      setLnRcvInvoice(r.payment_request);
+      notify("Facture Lightning créée — crédit à réception", "success");
+    } catch (e) {
+      notify(String(e), "error");
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const doMint = async () => {
     if (!mintName.trim()) return notify("Nom requis", "error");
     setBusy(true);
@@ -346,6 +375,16 @@ export function Gateway({ onBack }: GatewayProps) {
       await navigator.clipboard.writeText(rcvAddr);
       setCopied(true);
       setTimeout(() => setCopied(false), 1500);
+    } catch {
+      /* ignore */
+    }
+  };
+
+  const copyLnInvoice = async () => {
+    try {
+      await navigator.clipboard.writeText(lnRcvInvoice);
+      setLnRcvCopied(true);
+      setTimeout(() => setLnRcvCopied(false), 1500);
     } catch {
       /* ignore */
     }
@@ -905,8 +944,63 @@ export function Gateway({ onBack }: GatewayProps) {
             )}
             <p className="text-muted" style={{ fontSize: 10, marginTop: 8 }}>
               Décode puis paie une facture Lightning en asset (débite ton solde, remboursé si
-              échec). Recevoir en LN arrive ensuite.
+              échec).
             </p>
+
+            {/* Lightning receive: create an asset invoice */}
+            <div
+              style={{
+                marginTop: 12,
+                paddingTop: 12,
+                borderTop: "1px solid rgba(255,255,255,0.06)",
+              }}
+            >
+              <strong style={{ fontSize: 13 }}>Recevoir (LN)</strong>
+              <div style={{ ...row, marginTop: 8 }}>
+                <input
+                  className="input"
+                  style={{ flex: 2 }}
+                  placeholder="Asset ID (hex)"
+                  value={lnRcvAssetId}
+                  onChange={(e) => setLnRcvAssetId(e.target.value)}
+                />
+                <input
+                  className="input"
+                  style={{ flex: 1 }}
+                  placeholder="Montant"
+                  inputMode="numeric"
+                  value={lnRcvAmount}
+                  onChange={(e) => setLnRcvAmount(e.target.value)}
+                />
+                <button className="btn btn-ghost" onClick={doLnReceive} disabled={busy}>
+                  {busy ? <span className="spinner" /> : null} Créer
+                </button>
+              </div>
+              {lnRcvInvoice && (
+                <div
+                  style={{
+                    marginTop: 8,
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 8,
+                    background: "rgba(255,255,255,0.03)",
+                    borderRadius: 8,
+                    padding: 8,
+                  }}
+                >
+                  <code style={{ flex: 1, fontSize: 11, wordBreak: "break-all" }}>
+                    {lnRcvInvoice}
+                  </code>
+                  <button className="btn btn-ghost" onClick={copyLnInvoice}>
+                    {lnRcvCopied ? "✓" : "Copier"}
+                  </button>
+                </div>
+              )}
+              <p className="text-muted" style={{ fontSize: 10, marginTop: 8 }}>
+                Crée une facture Lightning en asset ; ton solde est crédité à son règlement.
+                Nécessite un canal d'asset ouvert côté nœud.
+              </p>
+            </div>
           </div>
         </>
       )}
