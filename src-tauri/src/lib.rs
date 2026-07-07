@@ -219,6 +219,9 @@ pub fn run() {
             gateway::commands::gateway_send,
             gateway::commands::gateway_burn,
             gateway::commands::gateway_transfer,
+            gateway::commands::gateway_admin_channels,
+            gateway::commands::gateway_admin_channel_open,
+            gateway::commands::gateway_admin_peer_connect,
         ]);
 
     #[cfg(mobile)]

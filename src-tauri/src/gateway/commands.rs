@@ -301,3 +301,55 @@ pub async fn gateway_transfer(
         .post("/v1/transfer", body)
         .await
 }
+
+// ---- Operator (admin) — requires the gateway's OZARK_GATEWAY_ADMIN_PUBKEY to
+// equal this wallet's Nostr pubkey (see gateway_pubkey), else the gateway 403s.
+
+/// Operator: list the node's channels (asset channels included).
+#[command]
+pub async fn gateway_admin_channels(
+    state: State<'_, WalletState>,
+    app_handle: AppHandle,
+) -> Result<Value, String> {
+    client(&state, &app_handle)
+        .await?
+        .get("/v1/admin/channels")
+        .await
+}
+
+/// Operator: open an asset channel funded from the node's assets to a connected peer.
+#[command]
+pub async fn gateway_admin_channel_open(
+    state: State<'_, WalletState>,
+    app_handle: AppHandle,
+    asset_id: String,
+    asset_amount: u64,
+    peer_pubkey: String,
+    fee_rate_sat_vb: Option<u32>,
+) -> Result<Value, String> {
+    let body = json!({
+        "asset_id": asset_id,
+        "asset_amount": asset_amount,
+        "peer_pubkey": peer_pubkey,
+        "fee_rate_sat_vb": fee_rate_sat_vb,
+    });
+    client(&state, &app_handle)
+        .await?
+        .post("/v1/admin/channel/open", body)
+        .await
+}
+
+/// Operator: connect to a Lightning peer (prerequisite for opening a channel).
+#[command]
+pub async fn gateway_admin_peer_connect(
+    state: State<'_, WalletState>,
+    app_handle: AppHandle,
+    pubkey: String,
+    host: String,
+) -> Result<Value, String> {
+    let body = json!({ "pubkey": pubkey, "host": host });
+    client(&state, &app_handle)
+        .await?
+        .post("/v1/admin/peer/connect", body)
+        .await
+}
