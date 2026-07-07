@@ -90,6 +90,15 @@ interface DecodedAssetInvoice {
   destination: string;
 }
 
+interface ChannelInfo {
+  active: boolean;
+  peer: string;
+  chan_id: string;
+  capacity: number;
+  local_balance: number;
+  remote_balance: number;
+}
+
 const card: CSSProperties = { padding: 18, marginBottom: 14 };
 const label: CSSProperties = { fontSize: 12, fontWeight: 600, marginBottom: 6, display: "block" };
 const row: CSSProperties = { display: "flex", gap: 8, marginBottom: 8 };
@@ -159,6 +168,17 @@ export function Gateway({ onBack }: GatewayProps) {
   const [lnRcvAmount, setLnRcvAmount] = useState("");
   const [lnRcvInvoice, setLnRcvInvoice] = useState("");
   const [lnRcvCopied, setLnRcvCopied] = useState(false);
+
+  // Operator (admin) — asset channel management (only works if this wallet's
+  // pubkey is the gateway's OZARK_GATEWAY_ADMIN_PUBKEY).
+  const [opShown, setOpShown] = useState(false);
+  const [channels, setChannels] = useState<ChannelInfo[] | null>(null);
+  const [peerPubkey, setPeerPubkey] = useState("");
+  const [peerHost, setPeerHost] = useState("");
+  const [chAssetId, setChAssetId] = useState("");
+  const [chAmount, setChAmount] = useState("");
+  const [chPeer, setChPeer] = useState("");
+  const [chFee, setChFee] = useState("");
 
   // Mint
   const [mintName, setMintName] = useState("");
@@ -321,6 +341,54 @@ export function Gateway({ onBack }: GatewayProps) {
       });
       setLnRcvInvoice(r.payment_request);
       notify("Facture Lightning créée — crédit à réception", "success");
+    } catch (e) {
+      notify(String(e), "error");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const doListChannels = async () => {
+    setBusy(true);
+    try {
+      setChannels(await invoke<ChannelInfo[]>("gateway_admin_channels"));
+    } catch (e) {
+      notify(String(e), "error");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const doConnectPeer = async () => {
+    if (!peerPubkey.trim() || !peerHost.trim()) return notify("Pubkey et host requis", "error");
+    setBusy(true);
+    try {
+      await invoke("gateway_admin_peer_connect", {
+        pubkey: peerPubkey.trim(),
+        host: peerHost.trim(),
+      });
+      notify("Pair connecté", "success");
+    } catch (e) {
+      notify(String(e), "error");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const doOpenChannel = async () => {
+    const amt = Number(chAmount);
+    if (!chAssetId.trim() || !chPeer.trim() || !Number.isFinite(amt) || amt <= 0)
+      return notify("Asset id, montant et pair requis", "error");
+    setBusy(true);
+    try {
+      const r = await invoke<{ txid: string }>("gateway_admin_channel_open", {
+        assetId: chAssetId.trim(),
+        assetAmount: amt,
+        peerPubkey: chPeer.trim(),
+        feeRateSatVb: chFee.trim() ? Number(chFee) : null,
+      });
+      notify(`Canal ouvert — txid ${r.txid.slice(0, 12)}…`, "success");
+      doListChannels();
     } catch (e) {
       notify(String(e), "error");
     } finally {
@@ -1099,6 +1167,136 @@ export function Gateway({ onBack }: GatewayProps) {
                 Nécessite un canal d'asset ouvert côté nœud.
               </p>
             </div>
+          </div>
+
+          {/* Operator (admin) — asset channel management */}
+          <div className="glass-card" style={card}>
+            <button
+              className="btn btn-ghost"
+              style={{ fontSize: 13, padding: "2px 8px" }}
+              onClick={() => setOpShown((v) => !v)}
+            >
+              ⚙️ Opérateur (canaux d'asset) {opShown ? "▲" : "▼"}
+            </button>
+            {opShown && (
+              <div style={{ marginTop: 10 }}>
+                <p className="text-muted" style={{ fontSize: 10, marginBottom: 10 }}>
+                  Réservé à l'opérateur du nœud : ta clé (🔑 ci-dessus) doit être définie en{" "}
+                  <code>OZARK_GATEWAY_ADMIN_PUBKEY</code> sur le gateway, sinon 403. Ouvrir un
+                  canal d'asset débloque le routage LN (payer/recevoir).
+                </p>
+
+                <button className="btn btn-ghost" onClick={doListChannels} disabled={busy}>
+                  {busy ? <span className="spinner" /> : null} Lister les canaux
+                </button>
+                {channels &&
+                  (channels.length === 0 ? (
+                    <p className="text-muted" style={{ fontSize: 11, marginTop: 8 }}>
+                      Aucun canal.
+                    </p>
+                  ) : (
+                    <div
+                      style={{ marginTop: 8, display: "flex", flexDirection: "column", gap: 6 }}
+                    >
+                      {channels.map((c) => (
+                        <div
+                          key={c.chan_id}
+                          style={{
+                            background: "rgba(255,255,255,0.03)",
+                            borderRadius: 8,
+                            padding: 8,
+                            fontSize: 11,
+                          }}
+                        >
+                          <div>
+                            {c.active ? "🟢" : "⚪"}{" "}
+                            <code style={{ wordBreak: "break-all" }}>{c.peer.slice(0, 20)}…</code>
+                          </div>
+                          <div className="text-muted">
+                            cap {c.capacity.toLocaleString()} · local{" "}
+                            {c.local_balance.toLocaleString()} · remote{" "}
+                            {c.remote_balance.toLocaleString()}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  ))}
+
+                <div
+                  style={{
+                    marginTop: 12,
+                    paddingTop: 12,
+                    borderTop: "1px solid rgba(255,255,255,0.06)",
+                  }}
+                >
+                  <strong style={{ fontSize: 12 }}>Connecter un pair</strong>
+                  <div style={{ ...row, marginTop: 8 }}>
+                    <input
+                      className="input"
+                      style={{ flex: 2 }}
+                      placeholder="Pubkey du pair (hex)"
+                      value={peerPubkey}
+                      onChange={(e) => setPeerPubkey(e.target.value)}
+                    />
+                    <input
+                      className="input"
+                      style={{ flex: 1 }}
+                      placeholder="host:port"
+                      value={peerHost}
+                      onChange={(e) => setPeerHost(e.target.value)}
+                    />
+                  </div>
+                  <button className="btn btn-ghost" onClick={doConnectPeer} disabled={busy}>
+                    Connecter
+                  </button>
+                </div>
+
+                <div
+                  style={{
+                    marginTop: 12,
+                    paddingTop: 12,
+                    borderTop: "1px solid rgba(255,255,255,0.06)",
+                  }}
+                >
+                  <strong style={{ fontSize: 12 }}>Ouvrir un canal d'asset</strong>
+                  <input
+                    className="input"
+                    style={{ width: "100%", marginTop: 8, marginBottom: 8 }}
+                    placeholder="Asset ID (hex)"
+                    value={chAssetId}
+                    onChange={(e) => setChAssetId(e.target.value)}
+                  />
+                  <div style={row}>
+                    <input
+                      className="input"
+                      style={{ flex: 1 }}
+                      placeholder="Montant asset"
+                      inputMode="numeric"
+                      value={chAmount}
+                      onChange={(e) => setChAmount(e.target.value)}
+                    />
+                    <input
+                      className="input"
+                      style={{ flex: 1 }}
+                      placeholder="Frais sat/vB"
+                      inputMode="numeric"
+                      value={chFee}
+                      onChange={(e) => setChFee(e.target.value)}
+                    />
+                  </div>
+                  <input
+                    className="input"
+                    style={{ width: "100%", marginBottom: 8 }}
+                    placeholder="Pubkey du pair (hex, déjà connecté)"
+                    value={chPeer}
+                    onChange={(e) => setChPeer(e.target.value)}
+                  />
+                  <button className="btn btn-primary" onClick={doOpenChannel} disabled={busy}>
+                    {busy ? <span className="spinner" /> : null} Ouvrir le canal
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
         </>
       )}
