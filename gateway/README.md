@@ -152,7 +152,7 @@ binds the token to a single endpoint).
 | `OZARK_GATEWAY_MAX_SKEW_SECS`  | no  | `60` | NIP-98 timestamp tolerance |
 | `OZARK_GATEWAY_LND_MACAROON`   | no  | — | lnd macaroon path: `invoices:read` (LN-receive credit) + `invoices:write` (sats deposit) |
 | `OZARK_GATEWAY_CHARGE_FEES`    | no  | `0` | charge sats fees on mint/send (needs operator + lnd `invoices:write`) |
-| `OZARK_GATEWAY_FEE_MARGIN_BPS` | no  | `1000` | operator markup on the network estimate, bps (1000 = 10%) |
+| `OZARK_GATEWAY_FEE_MARGIN_BPS` | no  | `300` | operator markup on the network estimate, bps (300 = 3%) |
 | `OZARK_GATEWAY_FEE_FLOOR_SATS` | no  | `100` | minimum sats per chargeable op |
 | `OZARK_GATEWAY_MINT_VSIZE` / `_SEND_VSIZE` | no | `250` / `200` | assumed tx vsize for the estimate |
 | `OZARK_GATEWAY_DEFAULT_FEE_RATE` | no | `5` | sat/vB assumed when the request omits a rate |

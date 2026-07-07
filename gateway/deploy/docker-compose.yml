@@ -50,7 +50,7 @@ services:
       # operator. Off by default (ops free). Needs an operator + an lnd macaroon
       # with invoices:write (users top up their sats via /v1/sats/deposit).
       OZARK_GATEWAY_CHARGE_FEES: ${OZARK_GATEWAY_CHARGE_FEES:-}
-      OZARK_GATEWAY_FEE_MARGIN_BPS: ${OZARK_GATEWAY_FEE_MARGIN_BPS:-1000}
+      OZARK_GATEWAY_FEE_MARGIN_BPS: ${OZARK_GATEWAY_FEE_MARGIN_BPS:-300}
       OZARK_GATEWAY_FEE_FLOOR_SATS: ${OZARK_GATEWAY_FEE_FLOOR_SATS:-100}
       OZARK_GATEWAY_MINT_VSIZE: ${OZARK_GATEWAY_MINT_VSIZE:-250}
       OZARK_GATEWAY_SEND_VSIZE: ${OZARK_GATEWAY_SEND_VSIZE:-200}
