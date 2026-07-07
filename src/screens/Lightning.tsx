@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { motion } from "framer-motion";
 import { ArrowLeft, Zap, Send, QrCode, Copy, Check, RefreshCw, Link, ScanLine } from "lucide-react";
 import { scanQrCode } from "../lib/scan";
+import { QRImage } from "../components/QRImage";
 import { useNotification } from "../contexts/NotificationContext";
 import { useI18n } from "../i18n/I18nContext";
 import { MainnetBanner } from "../components/MainnetBanner";
@@ -274,6 +275,11 @@ export function Lightning({ onBack, initialInvoice }: LightningProps) {
         >
           <QrCode size={16} /> {t("lightning.createInvoice")}
         </button>
+        {receiveInvoice && (
+          <div style={{ display: "flex", justifyContent: "center", marginTop: "12px" }}>
+            <QRImage value={receiveInvoice} />
+          </div>
+        )}
         {receiveInvoice && (
           <div
             style={{
