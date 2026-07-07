@@ -69,6 +69,7 @@ async fn run() -> Result<(), String> {
             public_base_url: cfg.public_base_url.clone(),
             max_skew_secs: cfg.max_skew_secs,
             admin_pubkey: cfg.admin_pubkey.clone(),
+            allow_admin_claim: cfg.allow_admin_claim,
         },
     };
 

@@ -43,6 +43,7 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/send", post(send))
         .route("/v1/burn", post(burn))
         .route("/v1/transfer", post(transfer))
+        .route("/v1/admin/claim", post(admin_claim))
         .route("/v1/admin/channels", get(admin_channels))
         .route("/v1/admin/channel/open", post(admin_channel_open))
         .route("/v1/admin/peer/connect", post(admin_peer_connect))
@@ -75,8 +76,17 @@ fn auth_body(
     Ok(authenticate(&state.auth, headers, method, uri, body)?)
 }
 
+/// The current operator pubkey: the env-configured one wins; else a prior claim
+/// persisted in the registry. `None` => no operator yet (admin routes are 403).
+fn effective_admin(state: &AppState) -> GatewayResult<Option<String>> {
+    if let Some(a) = &state.auth.admin_pubkey {
+        return Ok(Some(a.clone()));
+    }
+    Ok(state.registry.get_admin_pubkey()?.map(|s| s.to_lowercase()))
+}
+
 /// Authenticate an **operator** request: a valid NIP-98 signed by exactly the
-/// configured admin pubkey. 403 when no admin is configured or the caller isn't it.
+/// current operator pubkey. 403 when there is no operator or the caller isn't it.
 fn auth_admin(
     state: &AppState,
     headers: &HeaderMap,
@@ -85,8 +95,8 @@ fn auth_admin(
     body: &[u8],
 ) -> GatewayResult<()> {
     let caller = authenticate(&state.auth, headers, method, uri, body)?.to_lowercase();
-    match &state.auth.admin_pubkey {
-        Some(admin) if *admin == caller => Ok(()),
+    match effective_admin(state)? {
+        Some(admin) if admin == caller => Ok(()),
         _ => Err(GatewayError::Forbidden("operator only".into())),
     }
 }
@@ -834,6 +844,44 @@ async fn transfer(
 // liquidity, so they are gated to the configured operator pubkey — never exposed
 // to custodial users. This is what makes LN-asset routing possible in the first
 // place (pay/receive only route once an asset channel with a quoting peer exists).
+
+#[derive(Debug, Serialize)]
+struct ClaimResponse {
+    status: String,
+    pubkey: String,
+}
+
+/// Trust-on-first-use operator claim: when `allow_admin_claim` is on and no
+/// operator exists yet, the authenticated caller becomes the persisted operator.
+/// One tap, no hex to copy. Idempotent for the same caller; 403 once claimed or if
+/// claiming is disabled. Turn `OZARK_GATEWAY_ALLOW_ADMIN_CLAIM` off after setup.
+async fn admin_claim(
+    State(state): State<AppState>,
+    method: Method,
+    uri: Uri,
+    headers: HeaderMap,
+    body: Bytes,
+) -> GatewayResult<Json<ClaimResponse>> {
+    let caller = auth_body(&state, &headers, &method, &uri, &body)?.to_lowercase();
+    if !state.auth.allow_admin_claim {
+        return Err(GatewayError::Forbidden("admin claim is disabled".into()));
+    }
+    if let Some(existing) = effective_admin(&state)? {
+        if existing == caller {
+            return Ok(Json(ClaimResponse {
+                status: "ok".into(),
+                pubkey: caller,
+            }));
+        }
+        return Err(GatewayError::Forbidden("operator already claimed".into()));
+    }
+    state.registry.set_admin_pubkey(&caller)?;
+    log::info!("operator claimed by {caller}");
+    Ok(Json(ClaimResponse {
+        status: "ok".into(),
+        pubkey: caller,
+    }))
+}
 
 /// The node's channels (operator view). Owner-gated to the admin pubkey.
 async fn admin_channels(

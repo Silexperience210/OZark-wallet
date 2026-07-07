@@ -302,8 +302,22 @@ pub async fn gateway_transfer(
         .await
 }
 
-// ---- Operator (admin) — requires the gateway's OZARK_GATEWAY_ADMIN_PUBKEY to
-// equal this wallet's Nostr pubkey (see gateway_pubkey), else the gateway 403s.
+// ---- Operator (admin) — requires this wallet to be the node's operator (either
+// the gateway's OZARK_GATEWAY_ADMIN_PUBKEY, or claimed via gateway_admin_claim).
+
+/// Operator claim (trust-on-first-use): make this wallet the node's operator. Only
+/// works when the gateway has `OZARK_GATEWAY_ALLOW_ADMIN_CLAIM` on and no operator
+/// exists yet — a one-tap setup with no pubkey to copy.
+#[command]
+pub async fn gateway_admin_claim(
+    state: State<'_, WalletState>,
+    app_handle: AppHandle,
+) -> Result<Value, String> {
+    client(&state, &app_handle)
+        .await?
+        .post("/v1/admin/claim", json!({}))
+        .await
+}
 
 /// Operator: list the node's channels (asset channels included).
 #[command]

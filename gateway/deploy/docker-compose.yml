@@ -34,6 +34,9 @@ services:
       # Optional operator pubkey (64-hex Nostr) for the /v1/admin/* routes (open/
       # list asset channels, connect peers). Empty = admin routes disabled.
       OZARK_GATEWAY_ADMIN_PUBKEY: ${OZARK_GATEWAY_ADMIN_PUBKEY:-}
+      # Set to 1 during setup for one-tap operator claim (POST /v1/admin/claim);
+      # turn off after. Ignored once an operator exists.
+      OZARK_GATEWAY_ALLOW_ADMIN_CLAIM: ${OZARK_GATEWAY_ALLOW_ADMIN_CLAIM:-}
       # Background maintenance interval (reconcile + solvency audit + invoice
       # purge), seconds. 0 disables the loop (per-request reconcile still runs).
       OZARK_GATEWAY_RECONCILE_INTERVAL_SECS: ${OZARK_GATEWAY_RECONCILE_INTERVAL_SECS:-60}

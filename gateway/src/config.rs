@@ -49,9 +49,17 @@ pub struct Config {
     pub max_skew_secs: u64,
 
     /// Optional operator pubkey (64-hex Nostr). When set, `/v1/admin/*` routes
-    /// require a NIP-98 signature by exactly this key; when unset, admin routes are
-    /// disabled (403). Operator actions: open/list asset channels, connect peers.
+    /// require a NIP-98 signature by exactly this key; when unset, the admin is
+    /// whoever claimed it (see `allow_admin_claim`), else admin routes are 403.
+    /// Operator actions: open/list asset channels, connect peers.
     pub admin_pubkey: Option<String>,
+
+    /// When `true`, `POST /v1/admin/claim` lets the first authenticated caller
+    /// become the operator (persisted) — as long as no admin exists yet. A
+    /// one-tap, no-hex operator setup. Gate it on only during setup, since anyone
+    /// who can reach the onion could otherwise claim. Ignored once an admin exists
+    /// (env `admin_pubkey` or a prior claim).
+    pub allow_admin_claim: bool,
 
     /// How often the background maintenance loop runs reconciliation + the
     /// solvency audit + pending-invoice purge, in seconds. `0` disables the loop
@@ -97,6 +105,10 @@ impl Config {
             .ok()
             .filter(|s| !s.trim().is_empty())
             .map(|s| s.trim().to_lowercase());
+        let allow_admin_claim = std::env::var("OZARK_GATEWAY_ALLOW_ADMIN_CLAIM")
+            .ok()
+            .map(|s| matches!(s.trim(), "1" | "true" | "yes" | "on"))
+            .unwrap_or(false);
 
         let reconcile_interval_secs = env_u64("OZARK_GATEWAY_RECONCILE_INTERVAL_SECS", 60);
         let ln_receive_ttl_secs = env_u64("OZARK_GATEWAY_LN_RECEIVE_TTL_SECS", 86_400);
@@ -128,6 +140,7 @@ impl Config {
             public_base_url,
             max_skew_secs,
             admin_pubkey,
+            allow_admin_claim,
             reconcile_interval_secs,
             ln_receive_ttl_secs,
             backup_dir,
