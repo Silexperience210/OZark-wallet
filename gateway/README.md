@@ -49,6 +49,9 @@ instant internal transfers. Endpoints:
 | POST   | `/v1/send`            | yes  | send an asset out; **debits the caller** (403 if insufficient) |
 | POST   | `/v1/burn`            | yes  | burn an asset; **debits the caller** |
 | POST   | `/v1/transfer`        | yes  | **instant, free** ledger transfer to another gateway user |
+| GET    | `/v1/admin/channels`  | operator | list the node's channels (asset channels included) |
+| POST   | `/v1/admin/channel/open` | operator | open an asset channel to a connected peer (funds LN routing) |
+| POST   | `/v1/admin/peer/connect` | operator | connect to a Lightning peer |
 
 **Balance ledger:** ownership is `(asset_id, pubkey) → amount`. tapd holds the real
 assets; the ledger tracks each user's share. Every mutating action checks and moves
@@ -57,6 +60,13 @@ first and refund if tapd rejects; an insufficient balance is a **403**.
 
 **Instant transfers:** `/v1/transfer` between two gateway users is a pure ledger
 move — atomic, no on-chain transaction, no fee.
+
+**Operator routes:** `/v1/admin/*` spend the node's OWN liquidity (open asset
+channels, connect peers) so they are gated to a single operator: set
+`OZARK_GATEWAY_ADMIN_PUBKEY` to the operator's Nostr pubkey and the routes require
+a NIP-98 signature by exactly that key (403 otherwise, and disabled entirely when
+unset). Opening an asset channel to a quoting peer is the prerequisite for LN-asset
+pay/receive to route at all.
 
 **Async mint:** tapd broadcasts a batch immediately but the asset id only exists
 once the genesis confirms. The gateway holds a pending claim keyed by batch and

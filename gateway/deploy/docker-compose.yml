@@ -31,6 +31,9 @@ services:
       # Optional: set to http://<onion>.onion after first boot for strict URL
       # binding. Left empty, auth still binds each token to its endpoint (path-only).
       OZARK_GATEWAY_PUBLIC_URL: ${OZARK_GATEWAY_PUBLIC_URL:-}
+      # Optional operator pubkey (64-hex Nostr) for the /v1/admin/* routes (open/
+      # list asset channels, connect peers). Empty = admin routes disabled.
+      OZARK_GATEWAY_ADMIN_PUBKEY: ${OZARK_GATEWAY_ADMIN_PUBKEY:-}
       # Background maintenance interval (reconcile + solvency audit + invoice
       # purge), seconds. 0 disables the loop (per-request reconcile still runs).
       OZARK_GATEWAY_RECONCILE_INTERVAL_SECS: ${OZARK_GATEWAY_RECONCILE_INTERVAL_SECS:-60}

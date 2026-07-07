@@ -216,6 +216,18 @@ pub struct CreatedAssetInvoice {
     pub r_hash: String,
 }
 
+/// Summary of one lnd channel (operator view). Asset channels appear here too; the
+/// sat balances are the channel's BTC side.
+#[derive(Debug, Clone, Serialize)]
+pub struct ChannelInfo {
+    pub active: bool,
+    pub peer: String,
+    pub chan_id: String,
+    pub capacity: i64,
+    pub local_balance: i64,
+    pub remote_balance: i64,
+}
+
 impl TapdClient {
     /// Connect to a local tapd. `host` is `host:port`; `cert_pem` is tapd's TLS
     /// certificate (PEM); `macaroon_hex` authorizes the tapd/litd gRPC calls.
@@ -623,6 +635,76 @@ impl TapdClient {
             Ok(None) => Err("track_payment_v2: empty stream".to_string()),
             Err(e) => Err(format!("track_payment_v2: {e}")),
         }
+    }
+
+    /// Operator: open an asset channel funded with `asset_amount` of `asset_id` to
+    /// an already-connected `peer_pubkey`. Returns the funding txid. Spends the
+    /// node's own assets/liquidity — operator-only, never exposed to custodial users.
+    pub async fn fund_asset_channel(
+        &mut self,
+        asset_id: &str,
+        asset_amount: u64,
+        peer_pubkey: &str,
+        fee_rate_sat_vb: u32,
+    ) -> Result<String, String> {
+        let asset_id = hex::decode(asset_id).map_err(|e| format!("invalid asset id: {e}"))?;
+        let peer_pubkey =
+            hex::decode(peer_pubkey).map_err(|e| format!("invalid peer pubkey: {e}"))?;
+        let req = tapchannelrpc::FundChannelRequest {
+            asset_amount,
+            asset_id,
+            peer_pubkey,
+            fee_rate_sat_per_vbyte: fee_rate_sat_vb,
+            ..Default::default()
+        };
+        let resp = self
+            .tapchannel
+            .fund_channel(req)
+            .await
+            .map_err(|e| format!("fund_channel: {e}"))?
+            .into_inner();
+        Ok(resp.txid)
+    }
+
+    /// Operator: connect to a Lightning peer (`host` is `host:port`) — a
+    /// prerequisite for opening a channel. An "already connected" error is benign.
+    pub async fn connect_peer(&mut self, pubkey: &str, host: &str) -> Result<(), String> {
+        let req = lnrpc::ConnectPeerRequest {
+            addr: Some(lnrpc::LightningAddress {
+                pubkey: pubkey.to_string(),
+                host: host.to_string(),
+            }),
+            perm: false,
+            ..Default::default()
+        };
+        self.lightning
+            .connect_peer(req)
+            .await
+            .map_err(|e| format!("connect_peer: {e}"))?;
+        Ok(())
+    }
+
+    /// Operator: the node's channels (summary), asset channels included.
+    pub async fn list_channels(&mut self) -> Result<Vec<ChannelInfo>, String> {
+        let resp = self
+            .lightning
+            .list_channels(lnrpc::ListChannelsRequest::default())
+            .await
+            .map_err(|e| format!("list_channels: {e}"))?
+            .into_inner();
+        let out = resp
+            .channels
+            .into_iter()
+            .map(|c| ChannelInfo {
+                active: c.active,
+                peer: c.remote_pubkey,
+                chan_id: c.chan_id.to_string(),
+                capacity: c.capacity,
+                local_balance: c.local_balance,
+                remote_balance: c.remote_balance,
+            })
+            .collect();
+        Ok(out)
     }
 
     /// The node's currently-accepted RFQ quote counts (buy/sell). Read-only.
